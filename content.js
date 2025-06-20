@@ -28,6 +28,7 @@
     let stickyButtonElement = null; 
     let playerElementRef = null; 
     let playerStateObserver = null;
+    let wasStickyBeforeOsFullscreen = false;
 
     // --- SVG ICON DEFINITIONS ---
     const pinSVGIcon = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="currentColor"></path></g></svg>`;
@@ -120,19 +121,17 @@
                     pipBtnInstance.dataset.eyvPipListenersAttached = "true";
                 }
 
-                // --- Insert Buttons in Correct Order ---
                 const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
                 if (settingsButton) {
-                    // Ensure PiP is before settings (if not already there or not already correctly placed)
                     if (!playerRightControls.contains(pipBtnInstance) || (pipBtnInstance.nextSibling !== settingsButton && pipBtnInstance.parentNode === playerRightControls) ) {
                         playerRightControls.insertBefore(pipBtnInstance, settingsButton);
+                        if (DEBUG) console.log("[EYV DBG] PiP button inserted/moved before settings.");
                     }
-                    // Ensure Sticky is before PiP (if not already there or not already correctly placed)
                     if (!playerRightControls.contains(stickyButtonElement) || (stickyButtonElement.nextSibling !== pipBtnInstance && stickyButtonElement.parentNode === playerRightControls) ) {
                         playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
+                        if (DEBUG) console.log("[EYV DBG] Sticky button inserted/moved before PiP button.");
                     }
                 } else { 
-                    // Fallback if settings button isn't found, prepend in order (sticky will be first)
                     if (!playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
                     if (!playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement); 
                     if (DEBUG) console.warn("[EYV DBG] Settings button not found for precise button insertion, using prepend.");
@@ -149,16 +148,21 @@
                     if (result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
                         if (DEBUG) console.log('[EYV DBG] Attempting to default to sticky mode.');
                         
-                        const ytdAppElement = document.querySelector('ytd-app');
-                        const isYouTubeMiniplayerActive = ytdAppElement ? ytdAppElement.hasAttribute('miniplayer-is-active') : false;
-                        const isYouTubeFullscreen = ytdAppElement ? ytdAppElement.hasAttribute('fullscreen') : false;
-                        const isOSFullscreen = !!document.fullscreenElement;
+                        const currentVideoElement = playerElementRef?.querySelector('video.html5-main-video');
+                        if (currentVideoElement) {
+                            const ytdAppElement = document.querySelector('ytd-app');
+                            const isYouTubeMiniplayerActive = ytdAppElement ? ytdAppElement.hasAttribute('miniplayer-is-active') : false;
+                            const isYouTubeFullscreen = ytdAppElement ? ytdAppElement.hasAttribute('fullscreen') : false;
+                            const isOSFullscreen = !!document.fullscreenElement;
 
-                        if (!(document.pictureInPictureElement === videoElement || isYouTubeMiniplayerActive || isYouTubeFullscreen || isOSFullscreen)) {
-                             if (DEBUG) console.log('[EYV DBG] Conditions met, clicking sticky button to default activate.');
-                             stickyButtonElement.click();
+                            if (!(document.pictureInPictureElement === currentVideoElement || isYouTubeMiniplayerActive || isYouTubeFullscreen || isOSFullscreen)) {
+                                if (DEBUG) console.log('[EYV DBG] Conditions met, clicking sticky button to default activate.');
+                                stickyButtonElement.click();
+                            } else {
+                                if (DEBUG) console.log('[EYV DBG] Cannot default to sticky, a conflicting mode is active.');
+                            }
                         } else {
-                            if (DEBUG) console.log('[EYV DBG] Cannot default to sticky, a conflicting mode is active.');
+                             if (DEBUG) console.log('[EYV DBG] videoElement not found in default sticky check.');
                         }
                     }
                 });
@@ -270,22 +274,46 @@
             if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
             for (const mutation of mutationsList) {
                 if (mutation.type === 'attributes') {
-                    const targetElement = mutation.target; const attrName = mutation.attributeName;
-                    let shouldDeactivate = false;
+                    const targetElement = mutation.target; 
+                    const attrName = mutation.attributeName;
+                    let shouldDeactivateForThisMutation = false; 
+                    
                     if (DEBUG) console.log(`[EYV DBG MO] Attribute '${attrName}' changed on ${targetElement.tagName}${targetElement.id ? '#'+targetElement.id : ''}`);
                     if (targetElement === ytdAppElement) {
-                        if (attrName === 'miniplayer-is-active' && ytdAppElement.hasAttribute('miniplayer-is-active')) { shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] YT Miniplayer (ytd-app)."); }
-                        else if (attrName === 'fullscreen' && ytdAppElement.hasAttribute('fullscreen')) { shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] YT Fullscreen (ytd-app)."); }
+                        if (attrName === 'miniplayer-is-active' && ytdAppElement.hasAttribute('miniplayer-is-active')) { 
+                            shouldDeactivateForThisMutation = true; if (DEBUG) console.log("[EYV DBG MO] YT Miniplayer (ytd-app) activated."); 
+                        } else if (attrName === 'fullscreen' && ytdAppElement.hasAttribute('fullscreen')) { 
+                            shouldDeactivateForThisMutation = true; if (DEBUG) console.log("[EYV DBG MO] YT Fullscreen (ytd-app) activated."); 
+                        }
                     }
-                    if (!shouldDeactivate && targetElement === watchFlexyElement) {
-                        if (attrName === 'theater') { shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] Theater mode change (watch-flexy)."); }
-                        if (attrName === 'fullscreen' && watchFlexyElement.hasAttribute('fullscreen')) { shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] YT Fullscreen (watch-flexy)."); }
+                    if (!shouldDeactivateForThisMutation && targetElement === watchFlexyElement) {
+                         if (attrName === 'fullscreen' && watchFlexyElement.hasAttribute('fullscreen')) { 
+                            shouldDeactivateForThisMutation = true; if (DEBUG) console.log("[EYV DBG MO] YT Fullscreen (watch-flexy attr) activated."); 
+                        }
                     }
-                    if (!shouldDeactivate && targetElement === playerNodeToObserve && attrName === 'class') {
-                        if (playerNodeToObserve.classList.contains('ytp-fullscreen')) { shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class added."); }
-                        else if (mutation.oldValue && mutation.oldValue.includes('ytp-fullscreen')) { shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class removed."); }
+                    if (!shouldDeactivateForThisMutation && targetElement === playerNodeToObserve && attrName === 'class') {
+                        if (playerNodeToObserve.classList.contains('ytp-fullscreen')) { 
+                            shouldDeactivateForThisMutation = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class added (player entered its own fullscreen)."); 
+                        }
                     }
-                    if (shouldDeactivate) { deactivateStickyModeInternal(); return; }
+                    if (shouldDeactivateForThisMutation) { 
+                        deactivateStickyModeInternal(); 
+                        return; 
+                    }
+                    if (targetElement === watchFlexyElement && attrName === 'theater') {
+                        if (DEBUG) console.log("[EYV DBG MO] Theater mode attribute changed on ytd-watch-flexy. Re-centering sticky player.");
+                        if (playerElementRef && playerElementRef.classList.contains('eyv-player-fixed')) {
+                             centerStickyPlayer(playerElementRef); 
+                        }
+                    }
+                    if (targetElement === playerNodeToObserve && attrName === 'class' && 
+                        mutation.oldValue && mutation.oldValue.includes('ytp-fullscreen') && 
+                        !playerNodeToObserve.classList.contains('ytp-fullscreen')) {
+                        if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class removed. Re-centering sticky player.");
+                        if (playerElementRef && playerElementRef.classList.contains('eyv-player-fixed')) {
+                            centerStickyPlayer(playerElementRef);
+                        }
+                    }
                 }
             }
         };
@@ -298,12 +326,47 @@
     
     // --- HANDLE BROWSER/OS FULLSCREEN EXIT ---
     function handleFullscreenChange() {
-        if (!document.fullscreenElement && stickyButtonElement && stickyButtonElement.classList.contains('active')) {
-            if (DEBUG) console.log("[EYV DBG] Exited OS fullscreen. Deactivating sticky.");
-            deactivateStickyModeInternal();
-        } else if (document.fullscreenElement && stickyButtonElement && stickyButtonElement.classList.contains('active')) {
-            if (DEBUG) console.log("[EYV DBG] Entered OS fullscreen. Deactivating sticky.");
-            deactivateStickyModeInternal();
+        if (stickyButtonElement) {
+            if (document.fullscreenElement) { 
+                if (stickyButtonElement.classList.contains('active')) {
+                    if (DEBUG) console.log("[EYV DBG] Entered OS fullscreen. Deactivating sticky and remembering state.");
+                    wasStickyBeforeOsFullscreen = true;
+                    deactivateStickyModeInternal();
+                } else {
+                    wasStickyBeforeOsFullscreen = false;
+                }
+            } else { 
+                if (DEBUG) console.log("[EYV DBG] Exited OS fullscreen.");
+                chrome.storage.local.get(['defaultStickyEnabled'], function(result) {
+                    if (wasStickyBeforeOsFullscreen || result.defaultStickyEnabled) {
+                        if (DEBUG) console.log(`[EYV DBG] Exited OS Fullscreen. Attempting to re-activate sticky (wasSticky: ${wasStickyBeforeOsFullscreen}, defaultSticky: ${result.defaultStickyEnabled})`);
+                        
+                        const videoElement = playerElementRef?.querySelector('video.html5-main-video');
+                        if (videoElement) {
+                             const ytdAppElement = document.querySelector('ytd-app');
+                             const isYouTubeMiniplayerActive = ytdAppElement ? ytdAppElement.hasAttribute('miniplayer-is-active') : false;
+                             const isYouTubeFullscreen = ytdAppElement ? ytdAppElement.hasAttribute('fullscreen') : false;
+
+                            if (!(document.pictureInPictureElement === videoElement || isYouTubeMiniplayerActive || isYouTubeFullscreen)) {
+                                if (!stickyButtonElement.classList.contains('active')) {
+                                    stickyButtonElement.click();
+                                } else {
+                                     if (DEBUG) console.log("[EYV DBG] Sticky already active after exiting fullscreen, just re-centering.");
+                                     if(playerElementRef) centerStickyPlayer(playerElementRef);
+                                }
+                            } else {
+                                 if (DEBUG) console.log("[EYV DBG] Cannot re-activate sticky after OS fullscreen, conflicting mode active.");
+                            }
+                        }
+                    } else {
+                        if (playerElementRef && playerElementRef.classList.contains('eyv-player-fixed')) {
+                           if (DEBUG) console.log("[EYV DBG] Exited OS Fullscreen. Sticky was not active and not default. Ensuring player is centered if still fixed.");
+                           centerStickyPlayer(playerElementRef);
+                        }
+                    }
+                });
+                wasStickyBeforeOsFullscreen = false;
+            }
         }
     }
 

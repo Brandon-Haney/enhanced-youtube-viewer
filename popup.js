@@ -2,8 +2,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const defaultStickyToggle = document.getElementById('defaultStickyToggle');
     const inactiveWhenPausedToggle = document.getElementById('inactiveWhenPausedToggle');
     const inactiveAtEndToggle = document.getElementById('inactiveAtEndToggle');
-    const stickySizeSlider = document.getElementById('stickySizeSlider');
-    const stickySizeValue = document.getElementById('stickySizeValue');
     const footerVersion = document.querySelector('footer p');
 
     // Set version dynamically
@@ -27,12 +25,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (defaultStickyToggle) defaultStickyToggle.checked = !!result.defaultStickyEnabled;
         if (inactiveWhenPausedToggle) inactiveWhenPausedToggle.checked = !!result.inactiveWhenPaused;
         if (inactiveAtEndToggle) inactiveAtEndToggle.checked = !!result.inactiveAtEnd;
-        
-        if (stickySizeSlider) {
-            const size = result.stickySize || 75; // Default to 75%
-            stickySizeSlider.value = size;
-            stickySizeValue.textContent = `${size}%`;
-        }
     });
 
     // Save preference when 'defaultStickyToggle' changes

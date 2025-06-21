@@ -30,6 +30,9 @@
     let playerStateObserver = null;
     let wasStickyBeforeOsFullscreen = false;
     let wasStickyBeforePiP = false;
+    let wasStickyBeforePause = false;
+    let inactiveWhenPausedEnabled = false;
+    let inactiveAtEndEnabled = false;
 
     // --- SVG ICON DEFINITIONS ---
     const pinSVGIcon = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="currentColor"></path></g></svg>`;
@@ -84,6 +87,48 @@
                     Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
                     pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
                 }
+                
+                // Attach video state listeners for new features
+                if (!videoElement.dataset.eyvVideoListenersAttached) {
+                    chrome.storage.local.get(['inactiveWhenPaused', 'inactiveAtEnd'], (settings) => {
+                        inactiveWhenPausedEnabled = !!settings.inactiveWhenPaused;
+                        inactiveAtEndEnabled = !!settings.inactiveAtEnd;
+                        if (DEBUG) console.log(`[EYV DBG] Loaded settings: inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
+                    });
+
+                    videoElement.addEventListener('pause', () => {
+                        if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active')) {
+                            if (DEBUG) console.log("[EYV DBG] Paused. Deactivating sticky mode as per settings.");
+                            wasStickyBeforePause = true;
+                            deactivateStickyModeInternal();
+                        }
+                    });
+
+                    videoElement.addEventListener('play', () => {
+                        if (inactiveWhenPausedEnabled && wasStickyBeforePause) {
+                            wasStickyBeforePause = false; // Consume the flag
+                            const ytdApp = document.querySelector('ytd-app');
+                            const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
+                            const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
+                            if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) {
+                                if (stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
+                                    if (DEBUG) console.log("[EYV DBG] Resuming play. Re-activating sticky mode.");
+                                    stickyButtonElement.click();
+                                }
+                            }
+                        }
+                    });
+
+                    videoElement.addEventListener('ended', () => {
+                        if (inactiveAtEndEnabled && stickyButtonElement?.classList.contains('active')) {
+                            if (DEBUG) console.log("[EYV DBG] Video ended. Deactivating sticky mode as per settings.");
+                            deactivateStickyModeInternal();
+                        }
+                    });
+
+                    videoElement.dataset.eyvVideoListenersAttached = "true";
+                }
+                
                 if (!pipBtnInstance.dataset.eyvPipListenersAttached) {
                     if (document.pictureInPictureElement === videoElement) { pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; }
                     
@@ -141,6 +186,7 @@
         const button = document.createElement('button');
         button.addEventListener('click', (event) => {
             event.stopPropagation();
+            wasStickyBeforePause = false; // Manual click resets pause-related state
             const currentlySticky = button.classList.contains('active');
             if (!currentlySticky) { 
                 const ytdApp = document.querySelector('ytd-app');

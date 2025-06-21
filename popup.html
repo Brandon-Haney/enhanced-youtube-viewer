@@ -45,26 +45,29 @@
 
         <section class="settings">
             <h2>Settings</h2>
-            <div class="setting-item">
-                <label for="defaultStickyToggle">Default to Sticky Mode:</label>
-                <label class="switch">
-                    <input type="checkbox" id="defaultStickyToggle">
-                    <span class="slider round"></span>
-                </label>
-            </div>
-            <div class="setting-item">
-                <label for="inactiveWhenPausedToggle" title="Automatically deactivates sticky mode when the video is paused.">Inactive when paused:</label>
-                <label class="switch">
-                    <input type="checkbox" id="inactiveWhenPausedToggle">
-                    <span class="slider round"></span>
-                </label>
-            </div>
-            <div class="setting-item">
-                <label for="inactiveAtEndToggle" title="Automatically deactivates sticky mode when the video finishes.">Inactive at video end:</label>
-                <label class="switch">
-                    <input type="checkbox" id="inactiveAtEndToggle">
-                    <span class="slider round"></span>
-                </label>
+            <div class="setting-group">
+                <h3>Sticky Player Settings</h3>
+                <div class="setting-item">
+                    <label for="defaultStickyToggle" title="Start videos in Sticky Mode automatically.">Default to on:</label>
+                    <label class="switch">
+                        <input type="checkbox" id="defaultStickyToggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <label for="inactiveWhenPausedToggle" title="Automatically deactivates sticky mode when the video is paused.">Deactivate when paused:</label>
+                    <label class="switch">
+                        <input type="checkbox" id="inactiveWhenPausedToggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <label for="inactiveAtEndToggle" title="Automatically deactivates sticky mode when the video finishes.">Deactivate at video end:</label>
+                    <label class="switch">
+                        <input type="checkbox" id="inactiveAtEndToggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
             </div>
         </section>
 

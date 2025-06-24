@@ -31,6 +31,7 @@
     let wasStickyBeforeOsFullscreen = false;
     let wasStickyBeforePiP = false;
     let wasStickyBeforePause = false;
+    let isScrubbing = false;
     let inactiveWhenPausedEnabled = false;
     let inactiveAtEndEnabled = false;
 
@@ -73,7 +74,9 @@
             playerControlsAttempts++;
             const playerRightControls = player.querySelector('.ytp-right-controls');
             const videoElement = player.querySelector('video.html5-main-video');
-            if (playerRightControls && videoElement) {
+            const progressBar = player.querySelector('.ytp-progress-bar-container');
+            
+            if (playerRightControls && videoElement && progressBar) {
                 clearInterval(controlsPoll);
                 stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                 if (!stickyButtonElement) {
@@ -88,7 +91,6 @@
                     pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
                 }
                 
-                // Attach video state listeners for new features
                 if (!videoElement.dataset.eyvVideoListenersAttached) {
                     chrome.storage.local.get(['inactiveWhenPaused', 'inactiveAtEnd'], (settings) => {
                         inactiveWhenPausedEnabled = !!settings.inactiveWhenPaused;
@@ -96,7 +98,26 @@
                         if (DEBUG) console.log(`[EYV DBG] Loaded settings: inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
                     });
 
+                    if (!progressBar.dataset.eyvScrubListener) {
+                        progressBar.addEventListener('mousedown', () => {
+                            isScrubbing = true;
+                            if (DEBUG) console.log("[EYV DBG] Scrubbing started (mousedown on progress bar).");
+                        });
+                        // Listen on the whole document for mouseup, as the user might drag outside the bar
+                        document.addEventListener('mouseup', () => {
+                            if (isScrubbing) {
+                                isScrubbing = false;
+                                if (DEBUG) console.log("[EYV DBG] Scrubbing finished (mouseup).");
+                            }
+                        });
+                        progressBar.dataset.eyvScrubListener = "true";
+                    }
+                    
                     videoElement.addEventListener('pause', () => {
+                        if (isScrubbing) {
+                            if (DEBUG) console.log("[EYV DBG] Paused, but ignored because user is scrubbing.");
+                            return;
+                        }
                         if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active')) {
                             if (DEBUG) console.log("[EYV DBG] Paused. Deactivating sticky mode as per settings.");
                             wasStickyBeforePause = true;
@@ -162,7 +183,7 @@
                         if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) stickyButtonElement.click();
                     }
                 });
-            } else if (playerControlsAttempts >= maxPlayerControlsAttempts) { clearInterval(controlsPoll); console.warn('[EYV] Failed to find player controls/video.'); }
+            } else if (playerControlsAttempts >= maxPlayerControlsAttempts) { clearInterval(controlsPoll); console.warn('[EYV] Failed to find player controls/video/progress bar.'); }
         }, 500);
         window.addEventListener('resize', () => { if (playerElementRef?.classList.contains('eyv-player-fixed')) centerStickyPlayer(playerElementRef); });
         document.addEventListener('fullscreenchange', handleFullscreenChange);

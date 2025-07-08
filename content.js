@@ -35,6 +35,22 @@
     let inactiveWhenPausedEnabled = false;
     let inactiveAtEndEnabled = false;
 
+    // --- ADD MESSAGE LISTENER FOR POPUP SETTINGS ---
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (message.type === "SETTING_CHANGED") {
+                if (DEBUG) console.log(`[EYV DBG] Received setting change: ${message.key} = ${message.value}`);
+                if (message.key === 'inactiveWhenPaused') {
+                    inactiveWhenPausedEnabled = message.value;
+                } else if (message.key === 'inactiveAtEnd') {
+                    inactiveAtEndEnabled = message.value;
+                }
+                sendResponse({ status: "ok" });
+            }
+            return true;
+        });
+    }
+
     // --- SVG ICON DEFINITIONS ---
     const pinSVGIcon = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="currentColor"></path></g></svg>`;
     const pinSVGIconActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="var(--yt-spec-static-brand-red, #FF0000)"></path></g></svg>`;
@@ -92,11 +108,13 @@
                 }
                 
                 if (!videoElement.dataset.eyvVideoListenersAttached) {
-                    chrome.storage.local.get(['inactiveWhenPaused', 'inactiveAtEnd'], (settings) => {
-                        inactiveWhenPausedEnabled = !!settings.inactiveWhenPaused;
-                        inactiveAtEndEnabled = !!settings.inactiveAtEnd;
-                        if (DEBUG) console.log(`[EYV DBG] Loaded settings: inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
-                    });
+                    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                        chrome.storage.local.get(['inactiveWhenPaused', 'inactiveAtEnd'], (settings) => {
+                            inactiveWhenPausedEnabled = !!settings.inactiveWhenPaused;
+                            inactiveAtEndEnabled = !!settings.inactiveAtEnd;
+                            if (DEBUG) console.log(`[EYV DBG] Loaded settings: inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
+                        });
+                    }
 
                     if (!progressBar.dataset.eyvScrubListener) {
                         progressBar.addEventListener('mousedown', () => {
@@ -175,14 +193,17 @@
                     if (!playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement); 
                 }
                 if (playerElementRef && !playerStateObserver) setupPlayerStateObserver(playerElementRef, videoElement);
-                chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
-                    if (result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
-                        const ytdApp = document.querySelector('ytd-app');
-                        const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
-                        const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
-                        if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) stickyButtonElement.click();
-                    }
-                });
+                // FIX: Add guard clause before accessing storage
+                if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                    chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
+                        if (result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
+                            const ytdApp = document.querySelector('ytd-app');
+                            const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
+                            const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
+                            if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) stickyButtonElement.click();
+                        }
+                    });
+                }
             } else if (playerControlsAttempts >= maxPlayerControlsAttempts) { clearInterval(controlsPoll); console.warn('[EYV] Failed to find player controls/video/progress bar.'); }
         }, 500);
         window.addEventListener('resize', () => { if (playerElementRef?.classList.contains('eyv-player-fixed')) centerStickyPlayer(playerElementRef); });
@@ -327,6 +348,10 @@
     function tryReactivatingStickyAfterPiPOrMiniplayer(videoElement, isExitingOsFullscreen = false) {
         if (!videoElement) {
             if (DEBUG) console.log("[EYV DBG tryReactivating] No videoElement provided.");
+            return;
+        }
+        if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) {
+            if (DEBUG) console.log("[EYV DBG] Extension context lost. Cannot access storage.");
             return;
         }
         chrome.storage.local.get(['defaultStickyEnabled'], (result) => {

@@ -37,6 +37,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Load saved preferences for all settings
     chrome.storage.local.get(['defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd'], function(result) {
+        // Double-check Chrome context is still valid after async callback
+        if (!chrome.runtime?.id) {
+            console.error('[EYV Popup] Chrome context invalidated during storage operation');
+            return;
+        }
         if (chrome.runtime.lastError) {
             console.error('[EYV Popup] Storage error:', chrome.runtime.lastError);
             return;
@@ -51,6 +56,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (defaultStickyToggle) {
         defaultStickyToggle.addEventListener('change', function() {
             chrome.storage.local.set({defaultStickyEnabled: this.checked}, () => {
+                // Double-check Chrome context is still valid after async callback
+                if (!chrome.runtime?.id) {
+                    console.error('[EYV Popup] Chrome context invalidated during storage operation');
+                    return;
+                }
                 if (chrome.runtime.lastError) {
                     console.error('[EYV Popup] Storage error:', chrome.runtime.lastError);
                 }
@@ -62,6 +72,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (inactiveWhenPausedToggle) {
         inactiveWhenPausedToggle.addEventListener('change', function() {
             chrome.storage.local.set({inactiveWhenPaused: this.checked}, () => {
+                // Double-check Chrome context is still valid after async callback
+                if (!chrome.runtime?.id) {
+                    console.error('[EYV Popup] Chrome context invalidated during storage operation');
+                    return;
+                }
                 if (chrome.runtime.lastError) {
                     console.error('[EYV Popup] Storage error:', chrome.runtime.lastError);
                     return;
@@ -75,6 +90,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (inactiveAtEndToggle) {
         inactiveAtEndToggle.addEventListener('change', function() {
             chrome.storage.local.set({inactiveAtEnd: this.checked}, () => {
+                // Double-check Chrome context is still valid after async callback
+                if (!chrome.runtime?.id) {
+                    console.error('[EYV Popup] Chrome context invalidated during storage operation');
+                    return;
+                }
                 if (chrome.runtime.lastError) {
                     console.error('[EYV Popup] Storage error:', chrome.runtime.lastError);
                     return;

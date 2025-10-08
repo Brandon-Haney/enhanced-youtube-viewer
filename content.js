@@ -6,6 +6,80 @@
     // --- DEBUG FLAG ---
     const DEBUG = false; // Set to true for verbose debugging
 
+    // --- CLEANUP REGISTRY ---
+    // Tracks all event listeners to prevent memory leaks on YouTube SPA navigation
+    const cleanupRegistry = {
+        listeners: [],
+        observers: [],
+        intervals: [],
+
+        // Register an event listener for cleanup
+        addListener(target, event, handler, options) {
+            target.addEventListener(event, handler, options);
+            this.listeners.push({ target, event, handler, options });
+        },
+
+        // Register a MutationObserver for cleanup
+        addObserver(observer) {
+            this.observers.push(observer);
+        },
+
+        // Register an interval for cleanup
+        addInterval(intervalId) {
+            this.intervals.push(intervalId);
+        },
+
+        // Clean up all registered resources
+        cleanup() {
+            // Remove all event listeners
+            this.listeners.forEach(({ target, event, handler, options }) => {
+                if (target && target.removeEventListener) {
+                    target.removeEventListener(event, handler, options);
+                }
+            });
+
+            // Disconnect all observers
+            this.observers.forEach(observer => {
+                if (observer && observer.disconnect) {
+                    observer.disconnect();
+                }
+            });
+
+            // Clear all intervals
+            this.intervals.forEach(intervalId => {
+                clearInterval(intervalId);
+            });
+
+            // Reset arrays
+            this.listeners = [];
+            this.observers = [];
+            this.intervals = [];
+
+            if (DEBUG) console.log('[EYV DBG] Cleanup complete: all listeners, observers, and intervals removed.');
+        }
+    };
+
+    // --- YOUTUBE SPA NAVIGATION HANDLERS ---
+    // YouTube is a Single Page Application (SPA) that navigates without full page reloads.
+    // We must clean up and reinitialize on navigation to prevent memory leaks.
+    window.addEventListener('yt-navigate-start', () => {
+        if (DEBUG) console.log('[EYV DBG] YouTube navigation starting, cleaning up...');
+        cleanupRegistry.cleanup();
+        // Reset initialization guard so we can reinitialize after navigation
+        window.eyvHasRun = false;
+    });
+
+    window.addEventListener('yt-navigate-finish', () => {
+        if (DEBUG) console.log('[EYV DBG] YouTube navigation finished, checking if reinitialization needed...');
+        // Only reinitialize if we're on a watch page
+        if (window.location.pathname === '/watch' && !window.eyvHasRun) {
+            if (DEBUG) console.log('[EYV DBG] On watch page, reinitializing...');
+            // Re-run the initialization by resetting the guard and starting the poller
+            window.eyvHasRun = true;
+            initializeMainPoller();
+        }
+    });
+
     // --- CLEANUP OF PREVIOUS INSTANCES ---
     const oldPageControls = document.querySelector('.eyv-controls'); if (oldPageControls) { oldPageControls.remove(); }
     document.querySelectorAll('.eyv-player-button, .eyv-pip-button').forEach(btn => btn.remove());
@@ -38,6 +112,13 @@
     // --- ADD MESSAGE LISTENER FOR POPUP SETTINGS ---
     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            // Validate sender: only accept messages from this extension
+            if (!sender || sender.id !== chrome.runtime.id) {
+                console.warn('[EYV] Rejected message from unauthorized sender:', sender?.id);
+                sendResponse({ status: "error", message: "Unauthorized sender" });
+                return true;
+            }
+
             if (message.type === "SETTING_CHANGED") {
                 if (DEBUG) console.log(`[EYV DBG] Received setting change: ${message.key} = ${message.value}`);
                 // Validate message.value is a boolean
@@ -73,15 +154,40 @@
         return 0;
     }
 
+    // Sanitize CSS color values from YouTube page to prevent injection attacks
+    function sanitizeColorValue(value) {
+        if (!value || typeof value !== 'string') return '#0f0f0f';
+        const trimmed = value.trim();
+        // Allow hex colors: #fff, #ffffff, #ffffffff
+        if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(trimmed)) return trimmed;
+        // Allow rgb/rgba: rgb(0,0,0), rgba(0,0,0,1)
+        if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*[\d.]+\s*)?\)$/.test(trimmed)) return trimmed;
+        // Allow hsl/hsla: hsl(0,0%,0%), hsla(0,0%,0%,1)
+        if (/^hsla?\(\s*\d{1,3}\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%\s*(,\s*[\d.]+\s*)?\)$/.test(trimmed)) return trimmed;
+        // Reject everything else (including keywords to be extra safe)
+        return '#0f0f0f';
+    }
+
     // --- MAIN INITIALIZATION POLLER ---
-    mainPollInterval = setInterval(() => {
-        attempts++;
-        const playerElement = document.querySelector('ytd-player'); 
-        if (playerElement) {
-            clearInterval(mainPollInterval);
-            initializeFeatures(playerElement);
-        } else if (attempts >= maxAttempts) { clearInterval(mainPollInterval); console.warn("[EYV] FAILED: Could not find player element."); }
-    }, 500);
+    function initializeMainPoller() {
+        attempts = 0; // Reset attempts counter
+        mainPollInterval = setInterval(() => {
+            attempts++;
+            const playerElement = document.querySelector('ytd-player');
+            if (playerElement) {
+                clearInterval(mainPollInterval);
+                initializeFeatures(playerElement);
+            } else if (attempts >= maxAttempts) {
+                clearInterval(mainPollInterval);
+                console.warn("[EYV] FAILED: Could not find player element.");
+            }
+        }, 500);
+        // Register interval for cleanup
+        cleanupRegistry.addInterval(mainPollInterval);
+    }
+
+    // Start initial polling
+    initializeMainPoller();
 
     // --- FEATURE INITIALIZATION ---
     function initializeFeatures(player) { 
@@ -96,18 +202,20 @@
             const playerRightControls = player.querySelector('.ytp-right-controls');
             const videoElement = player.querySelector('video.html5-main-video');
             const progressBar = player.querySelector('.ytp-progress-bar-container');
-            
+
             if (playerRightControls && videoElement && progressBar) {
                 clearInterval(controlsPoll);
                 stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                 if (!stickyButtonElement) {
-                    stickyButtonElement = createStickyButtonLogic(player, videoElement); 
+                    stickyButtonElement = createStickyButtonLogic(player, videoElement);
+                    // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant defined in extension code (no user input)
                     Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Toggle Sticky Player', innerHTML: pinSVGIcon });
                     stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
                 }
                 let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
                 if (!pipBtnInstance) {
-                    pipBtnInstance = createPiPButtonLogic(videoElement); 
+                    pipBtnInstance = createPiPButtonLogic(videoElement);
+                    // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant defined in extension code (no user input)
                     Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
                     pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
                 }
@@ -115,6 +223,11 @@
                 if (!videoElement.dataset.eyvVideoListenersAttached) {
                     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
                         chrome.storage.local.get(['inactiveWhenPaused', 'inactiveAtEnd'], (settings) => {
+                            // Double-check Chrome context is still valid after async callback
+                            if (!chrome.runtime?.id) {
+                                console.error('[EYV] Chrome context invalidated during storage operation');
+                                return;
+                            }
                             if (chrome.runtime.lastError) {
                                 console.error('[EYV] Storage access failed:', chrome.runtime.lastError);
                                 return;
@@ -126,25 +239,25 @@
                     }
 
                     if (!progressBar.dataset.eyvScrubListener) {
-                        progressBar.addEventListener('mousedown', () => {
+                        cleanupRegistry.addListener(progressBar, 'mousedown', () => {
                             isScrubbing = true;
                             if (DEBUG) console.log("[EYV DBG] Scrubbing started (mousedown on progress bar).");
                         });
                         // Listen on the whole document for mouseup, as the user might drag outside the bar
-                        document.addEventListener('mouseup', () => {
+                        cleanupRegistry.addListener(document, 'mouseup', () => {
                             if (isScrubbing) {
                                 isScrubbing = false;
                                 if (DEBUG) console.log("[EYV DBG] Scrubbing finished (mouseup).");
                             }
                         });
                         // Reset scrubbing flag if mouse leaves window or focus is lost
-                        document.addEventListener('mouseleave', () => {
+                        cleanupRegistry.addListener(document, 'mouseleave', () => {
                             if (isScrubbing) {
                                 isScrubbing = false;
                                 if (DEBUG) console.log("[EYV DBG] Scrubbing reset (mouse left document).");
                             }
                         });
-                        window.addEventListener('blur', () => {
+                        cleanupRegistry.addListener(window, 'blur', () => {
                             if (isScrubbing) {
                                 isScrubbing = false;
                                 if (DEBUG) console.log("[EYV DBG] Scrubbing reset (window lost focus).");
@@ -153,7 +266,7 @@
                         progressBar.dataset.eyvScrubListener = "true";
                     }
                     
-                    videoElement.addEventListener('pause', () => {
+                    cleanupRegistry.addListener(videoElement, 'pause', () => {
                         if (isScrubbing) {
                             if (DEBUG) console.log("[EYV DBG] Paused, but ignored because user is scrubbing.");
                             return;
@@ -165,7 +278,7 @@
                         }
                     });
 
-                    videoElement.addEventListener('play', () => {
+                    cleanupRegistry.addListener(videoElement, 'play', () => {
                         if (inactiveWhenPausedEnabled && wasStickyBeforePause) {
                             wasStickyBeforePause = false; // Consume the flag
                             const ytdApp = document.querySelector('ytd-app');
@@ -180,7 +293,7 @@
                         }
                     });
 
-                    videoElement.addEventListener('ended', () => {
+                    cleanupRegistry.addListener(videoElement, 'ended', () => {
                         if (inactiveAtEndEnabled && stickyButtonElement?.classList.contains('active')) {
                             if (DEBUG) console.log("[EYV DBG] Video ended. Deactivating sticky mode as per settings.");
                             deactivateStickyModeInternal();
@@ -191,10 +304,12 @@
                 }
                 
                 if (!pipBtnInstance.dataset.eyvPipListenersAttached) {
+                    // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
                     if (document.pictureInPictureElement === videoElement) { pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; }
 
-                    videoElement.addEventListener('enterpictureinpicture', () => {
+                    cleanupRegistry.addListener(videoElement, 'enterpictureinpicture', () => {
                         if (document.pictureInPictureElement === videoElement) {
+                            // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
                             pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive;
                             // If sticky is active when PiP is entered (e.g. via browser button/keyboard), deactivate it
                             if (stickyButtonElement?.classList.contains('active')) {
@@ -204,7 +319,8 @@
                             }
                         }
                     });
-                    videoElement.addEventListener('leavepictureinpicture', () => {
+                    cleanupRegistry.addListener(videoElement, 'leavepictureinpicture', () => {
+                        // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant (no user input)
                         pipBtnInstance.classList.remove('active'); pipBtnInstance.innerHTML = pipSVGDefault;
                         if (DEBUG) console.log("[EYV DBG] OS 'leavepictureinpicture' event. wasStickyBeforePiP:", wasStickyBeforePiP);
                         tryReactivatingStickyAfterPiPOrMiniplayer(videoElement);
@@ -224,6 +340,11 @@
                 // FIX: Add guard clause before accessing storage
                 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
                     chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
+                        // Double-check Chrome context is still valid after async callback
+                        if (!chrome.runtime?.id) {
+                            console.error('[EYV] Chrome context invalidated during storage operation');
+                            return;
+                        }
                         if (chrome.runtime.lastError) {
                             console.error('[EYV] Storage access failed:', chrome.runtime.lastError);
                             return;
@@ -238,8 +359,12 @@
                 }
             } else if (playerControlsAttempts >= maxPlayerControlsAttempts) { clearInterval(controlsPoll); console.warn('[EYV] Failed to find player controls/video/progress bar.'); }
         }, 500);
-        window.addEventListener('resize', () => { if (playerElementRef?.classList.contains('eyv-player-fixed')) centerStickyPlayer(playerElementRef); });
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        // Register interval for cleanup
+        cleanupRegistry.addInterval(controlsPoll);
+
+        // Register window and document event listeners
+        cleanupRegistry.addListener(window, 'resize', () => { if (playerElementRef?.classList.contains('eyv-player-fixed')) centerStickyPlayer(playerElementRef); });
+        cleanupRegistry.addListener(document, 'fullscreenchange', handleFullscreenChange);
     }
 
     // --- STICKY PLAYER HELPER ---
@@ -252,6 +377,7 @@
         }
         if (playerPlaceholder) playerPlaceholder.style.display = 'none';
         stickyButtonElement.classList.remove('active');
+        // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant (no user input)
         stickyButtonElement.innerHTML = pinSVGIcon;
         // Reset all state flags to prevent state desynchronization
         wasStickyBeforePiP = false;
@@ -262,37 +388,41 @@
     // --- STICKY PLAYER LOGIC ---
     function createStickyButtonLogic(playerElement, videoElementForPiPWatch) {
         const button = document.createElement('button');
-        button.addEventListener('click', (event) => {
+        const clickHandler = (event) => {
             event.stopPropagation();
             wasStickyBeforePause = false; // Manual click resets pause-related state
             const currentlySticky = button.classList.contains('active');
-            if (!currentlySticky) { 
+            if (!currentlySticky) {
                 const ytdApp = document.querySelector('ytd-app');
                 const watchFlexy = document.querySelector('ytd-watch-flexy');
                 if (document.pictureInPictureElement === videoElementForPiPWatch || ytdApp?.hasAttribute('miniplayer-is-active') || ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement) {
-                    console.log("[EYV] Cannot activate sticky: conflicting mode active."); return; 
+                    console.log("[EYV] Cannot activate sticky: conflicting mode active."); return;
                 }
                 const rect = playerElement.getBoundingClientRect();
                 const initialWidth = rect.width; const initialHeight = rect.height;
                 const initialLeft = rect.left; const initialTop = rect.top;
-                if (initialHeight === 0 || initialWidth === 0) return; 
+                if (initialHeight === 0 || initialWidth === 0) return;
                 originalPlayerAspectRatio = initialHeight / initialWidth;
-                if (!playerPlaceholder) { 
+                if (!playerPlaceholder) {
                     playerPlaceholder = document.createElement('div'); playerPlaceholder.id = 'eyv-player-placeholder';
                     if (playerElement.parentNode) playerElement.parentNode.insertBefore(playerPlaceholder, playerElement); else return;
                 }
-                playerPlaceholder.style.width = `${initialWidth}px`; playerPlaceholder.style.height = `${initialHeight}px`; 
-                playerPlaceholder.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue('--yt-spec-base-background').trim() || '#0f0f0f';
+                playerPlaceholder.style.width = `${initialWidth}px`; playerPlaceholder.style.height = `${initialHeight}px`;
+                // Sanitize CSS color value from YouTube page to prevent injection
+                const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--yt-spec-base-background');
+                playerPlaceholder.style.backgroundColor = sanitizeColorValue(bgColor);
                 playerPlaceholder.style.display = 'block';
                 playerElement.classList.add('eyv-player-fixed');
                 const isTheater = watchFlexy?.hasAttribute('theater');
                 const isYtFull = ytdApp?.hasAttribute('fullscreen');
-                if (!isTheater && !isYtFull && !document.fullscreenElement) { 
+                if (!isTheater && !isYtFull && !document.fullscreenElement) {
                     Object.assign(playerElement.style, { width: `${initialWidth}px`, height: `${initialHeight}px`, left: `${initialLeft}px`, top: `${initialTop}px`, transform: 'translateX(0%)' });
                 } else { centerStickyPlayer(playerElement); }
+                // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
             } else { deactivateStickyModeInternal(); }
-        });
+        };
+        cleanupRegistry.addListener(button, 'click', clickHandler);
         // Note: PiP event listener is added in initializeFeatures() to avoid duplication
         return button;
     }
@@ -357,8 +487,10 @@
         };
         playerStateObserver = new MutationObserver(callback);
         if (ytdApp) playerStateObserver.observe(ytdApp, observerConfig);
-        if (watchFlexy) playerStateObserver.observe(watchFlexy, observerConfig); 
+        if (watchFlexy) playerStateObserver.observe(watchFlexy, observerConfig);
         if (playerNodeToObserve) playerStateObserver.observe(playerNodeToObserve, observerConfig);
+        // Register observer for cleanup
+        cleanupRegistry.addObserver(playerStateObserver);
         if (DEBUG) console.log("[EYV DBG] PlayerStateObserver setup.");
     }
     
@@ -388,6 +520,11 @@
             return;
         }
         chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
+            // Double-check Chrome context is still valid after async callback
+            if (!chrome.runtime?.id) {
+                console.error('[EYV] Chrome context invalidated during storage operation');
+                return;
+            }
             if (chrome.runtime.lastError) {
                 console.error('[EYV] Storage access failed:', chrome.runtime.lastError);
                 return;
@@ -420,25 +557,26 @@
     // --- PICTURE-IN-PICTURE (PIP) LOGIC ---
     function createPiPButtonLogic(videoElement) {
         const button = document.createElement('button');
-        button.addEventListener('click', async (event) => {
+        const pipClickHandler = async (event) => {
             event.stopPropagation(); if (!document.pictureInPictureEnabled) return;
             try {
                 if (videoElement !== document.pictureInPictureElement) {
                     if (stickyButtonElement?.classList.contains('active')) {
                         wasStickyBeforePiP = true;
                         if (DEBUG) console.log("[EYV DBG] PiP requested while sticky active. Deactivating sticky.");
-                        deactivateStickyModeInternal(); 
-                        await new Promise(resolve => setTimeout(resolve, 50)); 
+                        deactivateStickyModeInternal();
+                        await new Promise(resolve => setTimeout(resolve, 50));
                     } else { wasStickyBeforePiP = false; }
                     await videoElement.requestPictureInPicture();
                 } else {
-                    await document.exitPictureInPicture(); 
+                    await document.exitPictureInPicture();
                 }
-            } catch (error) { 
-                console.error('[EYV] PiP Error:', error); 
+            } catch (error) {
+                console.error('[EYV] PiP Error:', error);
                 wasStickyBeforePiP = false;
             }
-        });
+        };
+        cleanupRegistry.addListener(button, 'click', pipClickHandler);
         return button;
     }
 

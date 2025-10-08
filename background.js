@@ -10,10 +10,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             },
             () => {
                 if (chrome.runtime.lastError) {
-                    if (chrome.runtime.lastError.message.includes("Cannot access a chrome:// URL") || 
+                    if (chrome.runtime.lastError.message.includes("Cannot access a chrome:// URL") ||
                         chrome.runtime.lastError.message.includes("No tab with id") ||
                         chrome.runtime.lastError.message.includes("The tab was closed") ||
-                        chrome.runtime.lastError.message.includes("Cannot access contents of page")) {
+                        chrome.runtime.lastError.message.includes("Cannot access contents of page") ||
+                        chrome.runtime.lastError.message.includes("was removed")) {
                     } else {
                         console.error("[BG SCRIPT] ERROR INJECTING content.js: ", chrome.runtime.lastError.message);
                     }

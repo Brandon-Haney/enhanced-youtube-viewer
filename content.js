@@ -40,23 +40,28 @@
         chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (message.type === "SETTING_CHANGED") {
                 if (DEBUG) console.log(`[EYV DBG] Received setting change: ${message.key} = ${message.value}`);
+                // Validate message.value is a boolean
+                if (typeof message.value !== 'boolean') {
+                    console.warn('[EYV] Invalid message value type:', typeof message.value);
+                    sendResponse({ status: "error", message: "Invalid value type" });
+                    return true;
+                }
                 if (message.key === 'inactiveWhenPaused') {
                     inactiveWhenPausedEnabled = message.value;
                 } else if (message.key === 'inactiveAtEnd') {
                     inactiveAtEndEnabled = message.value;
                 }
                 sendResponse({ status: "ok" });
+                return true; // Keep channel open for async response
             }
-            return true;
+            // Don't return true if we didn't handle the message
         });
     }
 
     // --- SVG ICON DEFINITIONS ---
     const pinSVGIcon = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="currentColor"></path></g></svg>`;
     const pinSVGIconActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="var(--yt-spec-static-brand-red, #FF0000)"></path></g></svg>`;
-    // const pinSVGIconActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g class="style-scope ytp-button"><path d="M16,12V4H17V2H7V4H8V12L6,14V16H11.2V22H12.8V16H18V14L16,12Z" class="style-scope ytp-button" fill="var(--yt-spec-call-to-action, #065FD4)"></path></g></svg>`;   
     const pipSVGDefault = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g fill="currentColor"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></g></svg>`;
-    // const pipSVGActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g fill="var(--yt-spec-call-to-action, #065FD4)"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></g></svg>`;
     const pipSVGActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g fill="var(--yt-spec-static-brand-red, #FF0000)"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></g></svg>`;
 
     // --- UTILITY FUNCTIONS ---
@@ -110,8 +115,12 @@
                 if (!videoElement.dataset.eyvVideoListenersAttached) {
                     if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
                         chrome.storage.local.get(['inactiveWhenPaused', 'inactiveAtEnd'], (settings) => {
-                            inactiveWhenPausedEnabled = !!settings.inactiveWhenPaused;
-                            inactiveAtEndEnabled = !!settings.inactiveAtEnd;
+                            if (chrome.runtime.lastError) {
+                                console.error('[EYV] Storage access failed:', chrome.runtime.lastError);
+                                return;
+                            }
+                            inactiveWhenPausedEnabled = !!(settings && settings.inactiveWhenPaused);
+                            inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
                             if (DEBUG) console.log(`[EYV DBG] Loaded settings: inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
                         });
                     }
@@ -126,6 +135,19 @@
                             if (isScrubbing) {
                                 isScrubbing = false;
                                 if (DEBUG) console.log("[EYV DBG] Scrubbing finished (mouseup).");
+                            }
+                        });
+                        // Reset scrubbing flag if mouse leaves window or focus is lost
+                        document.addEventListener('mouseleave', () => {
+                            if (isScrubbing) {
+                                isScrubbing = false;
+                                if (DEBUG) console.log("[EYV DBG] Scrubbing reset (mouse left document).");
+                            }
+                        });
+                        window.addEventListener('blur', () => {
+                            if (isScrubbing) {
+                                isScrubbing = false;
+                                if (DEBUG) console.log("[EYV DBG] Scrubbing reset (window lost focus).");
                             }
                         });
                         progressBar.dataset.eyvScrubListener = "true";
@@ -170,17 +192,23 @@
                 
                 if (!pipBtnInstance.dataset.eyvPipListenersAttached) {
                     if (document.pictureInPictureElement === videoElement) { pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; }
-                    
-                    videoElement.addEventListener('enterpictureinpicture', () => { 
-                        if (document.pictureInPictureElement === videoElement) { 
-                            pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; 
+
+                    videoElement.addEventListener('enterpictureinpicture', () => {
+                        if (document.pictureInPictureElement === videoElement) {
+                            pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive;
+                            // If sticky is active when PiP is entered (e.g. via browser button/keyboard), deactivate it
+                            if (stickyButtonElement?.classList.contains('active')) {
+                                wasStickyBeforePiP = true;
+                                if (DEBUG) console.log("[EYV DBG] OS PiP entered. Deactivating sticky.");
+                                deactivateStickyModeInternal();
+                            }
                         }
                     });
-                    videoElement.addEventListener('leavepictureinpicture', () => { 
-                        pipBtnInstance.classList.remove('active'); pipBtnInstance.innerHTML = pipSVGDefault; 
+                    videoElement.addEventListener('leavepictureinpicture', () => {
+                        pipBtnInstance.classList.remove('active'); pipBtnInstance.innerHTML = pipSVGDefault;
                         if (DEBUG) console.log("[EYV DBG] OS 'leavepictureinpicture' event. wasStickyBeforePiP:", wasStickyBeforePiP);
                         tryReactivatingStickyAfterPiPOrMiniplayer(videoElement);
-                        wasStickyBeforePiP = false; 
+                        wasStickyBeforePiP = false;
                     });
                     pipBtnInstance.dataset.eyvPipListenersAttached = "true";
                 }
@@ -196,7 +224,11 @@
                 // FIX: Add guard clause before accessing storage
                 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
                     chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
-                        if (result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
+                        if (chrome.runtime.lastError) {
+                            console.error('[EYV] Storage access failed:', chrome.runtime.lastError);
+                            return;
+                        }
+                        if (result && result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
                             const ytdApp = document.querySelector('ytd-app');
                             const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
                             const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
@@ -211,16 +243,20 @@
     }
 
     // --- STICKY PLAYER HELPER ---
-    function deactivateStickyModeInternal() { 
-        if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return; 
+    function deactivateStickyModeInternal() {
+        if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
         if (DEBUG) console.log('[EYV DBG] Deactivating sticky mode.'); else console.log('[EYV] Deactivating sticky mode.');
-        if (playerElementRef) { 
+        if (playerElementRef) {
             playerElementRef.classList.remove('eyv-player-fixed');
             Object.assign(playerElementRef.style, { width: '', height: '', top: '', left: '', transform: '' });
         }
         if (playerPlaceholder) playerPlaceholder.style.display = 'none';
         stickyButtonElement.classList.remove('active');
         stickyButtonElement.innerHTML = pinSVGIcon;
+        // Reset all state flags to prevent state desynchronization
+        wasStickyBeforePiP = false;
+        wasStickyBeforePause = false;
+        wasStickyBeforeOsFullscreen = false;
     }
     
     // --- STICKY PLAYER LOGIC ---
@@ -236,8 +272,8 @@
                 if (document.pictureInPictureElement === videoElementForPiPWatch || ytdApp?.hasAttribute('miniplayer-is-active') || ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement) {
                     console.log("[EYV] Cannot activate sticky: conflicting mode active."); return; 
                 }
-                const rect = playerElement.getBoundingClientRect(); 
-                const initialWidth = rect.width; const initialHeight = rect.height; 
+                const rect = playerElement.getBoundingClientRect();
+                const initialWidth = rect.width; const initialHeight = rect.height;
                 const initialLeft = rect.left; const initialTop = rect.top;
                 if (initialHeight === 0 || initialWidth === 0) return; 
                 originalPlayerAspectRatio = initialHeight / initialWidth;
@@ -254,17 +290,10 @@
                 if (!isTheater && !isYtFull && !document.fullscreenElement) { 
                     Object.assign(playerElement.style, { width: `${initialWidth}px`, height: `${initialHeight}px`, left: `${initialLeft}px`, top: `${initialTop}px`, transform: 'translateX(0%)' });
                 } else { centerStickyPlayer(playerElement); }
-                button.classList.add('active'); button.innerHTML = pinSVGIconActive; 
+                button.classList.add('active'); button.innerHTML = pinSVGIconActive;
             } else { deactivateStickyModeInternal(); }
         });
-        if (videoElementForPiPWatch) { 
-            videoElementForPiPWatch.addEventListener('enterpictureinpicture', () => { 
-                if (document.pictureInPictureElement === videoElementForPiPWatch && button.classList.contains('active')) {
-                    if (DEBUG) console.log("[EYV DBG] OS PiP entered. Deactivating sticky.");
-                    deactivateStickyModeInternal();
-                }
-            }); 
-        }
+        // Note: PiP event listener is added in initializeFeatures() to avoid duplication
         return button;
     }
 
@@ -275,10 +304,11 @@
         const watchFlexy = document.querySelector('ytd-watch-flexy');
         const observerConfig = { attributes: true, attributeOldValue: true, attributeFilter: ['miniplayer-is-active', 'fullscreen', 'theater', 'class'] }; 
         const callback = (mutationsList) => {
-            let shouldDeactivate = false;
-            let shouldRecenter = false;
-            let isExitingMiniplayer = false;
-            for (const m of mutationsList) {
+            try {
+                let shouldDeactivate = false;
+                let shouldRecenter = false;
+                let isExitingMiniplayer = false;
+                for (const m of mutationsList) {
                 if (m.type !== 'attributes') continue;
                 const target = m.target; const attr = m.attributeName;
                 if (DEBUG) console.log(`[EYV DBG MO] Attr '${attr}' on ${target.tagName}${target.id?'#'+target.id:''}. OldValue: ${m.oldValue}`);
@@ -310,16 +340,19 @@
                         shouldRecenter = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class REMOVED.");
                     }
                 }
-                if (shouldDeactivate && stickyButtonElement?.classList.contains('active')) {
+                if (shouldDeactivate && stickyButtonElement?.isConnected && stickyButtonElement.classList.contains('active')) {
                     deactivateStickyModeInternal();
                     return;
                 }
             }
-            if (isExitingMiniplayer) {
-                tryReactivatingStickyAfterPiPOrMiniplayer(videoElement);
-                wasStickyBeforePiP = false;
-            } else if (shouldRecenter && playerElementRef?.classList.contains('eyv-player-fixed')) {
-                centerStickyPlayer(playerElementRef);
+                if (isExitingMiniplayer) {
+                    tryReactivatingStickyAfterPiPOrMiniplayer(videoElement);
+                    wasStickyBeforePiP = false;
+                } else if (shouldRecenter && playerElementRef?.isConnected && playerElementRef.classList.contains('eyv-player-fixed')) {
+                    centerStickyPlayer(playerElementRef);
+                }
+            } catch (error) {
+                console.error('[EYV] MutationObserver callback error:', error);
             }
         };
         playerStateObserver = new MutationObserver(callback);
@@ -355,8 +388,12 @@
             return;
         }
         chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
-            const shouldTryReactivate = (isExitingOsFullscreen && (wasStickyBeforeOsFullscreen || result.defaultStickyEnabled)) ||
-                                      (!isExitingOsFullscreen && (wasStickyBeforePiP || result.defaultStickyEnabled));
+            if (chrome.runtime.lastError) {
+                console.error('[EYV] Storage access failed:', chrome.runtime.lastError);
+                return;
+            }
+            const shouldTryReactivate = (isExitingOsFullscreen && (wasStickyBeforeOsFullscreen || (result && result.defaultStickyEnabled))) ||
+                                      (!isExitingOsFullscreen && (wasStickyBeforePiP || (result && result.defaultStickyEnabled)));
             if (shouldTryReactivate) {
                 if (DEBUG) console.log(`[EYV DBG tryReactivating] Attempting re-activation. wasStickyPiP: ${wasStickyBeforePiP}, wasStickyOsFS: ${wasStickyBeforeOsFullscreen}, default: ${result.defaultStickyEnabled}`);
                 const ytdApp = document.querySelector('ytd-app');
@@ -410,13 +447,13 @@
         if (!fixedPlayer?.classList.contains('eyv-player-fixed')) return;
         const mastheadOffset = getMastheadOffset();
         const watchFlexy = document.querySelector('ytd-watch-flexy');
-        const primaryCol = document.querySelector('#primary.ytd-watch-flexy'); 
-        let refRect, refName = "VP Fallback";
+        const primaryCol = document.querySelector('#primary.ytd-watch-flexy');
+        let refRect;
         const isTheater = watchFlexy?.hasAttribute('theater');
         const isYtFull = document.querySelector('ytd-app')?.hasAttribute('fullscreen');
-        if (isTheater || isYtFull) { refRect = watchFlexy.getBoundingClientRect(); refName = "Theater/Full"; }
-        else if (primaryCol) { refRect = primaryCol.getBoundingClientRect(); refName = "Default"; }
-        else if (watchFlexy) { refRect = watchFlexy.getBoundingClientRect(); refName = "Fallback"; }
+        if (isTheater || isYtFull) { refRect = watchFlexy.getBoundingClientRect(); }
+        else if (primaryCol) { refRect = primaryCol.getBoundingClientRect(); }
+        else if (watchFlexy) { refRect = watchFlexy.getBoundingClientRect(); }
         else {
             const vpW = window.innerWidth * 0.9, vpL = (window.innerWidth - vpW) / 2, vpH = vpW * originalPlayerAspectRatio;
             Object.assign(fixedPlayer.style, { width: `${vpW}px`, height: `${vpH}px`, left: `${vpL}px`, top: `${mastheadOffset}px`, transform: 'translateX(0%)' }); return;

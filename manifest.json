@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Enhanced YouTube Viewer",
-  "version": "1.3", "description": "Enhances YouTube with sticky player, PiP, and more.",
+  "version": "1.4",
+  "description": "Enhances YouTube with sticky player, PiP, and more.",
   "permissions": [
     "activeTab",
     "storage"

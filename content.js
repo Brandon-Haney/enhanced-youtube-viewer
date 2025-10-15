@@ -1051,6 +1051,13 @@
                 overflow: visible !important;
             }
 
+            @media (min-width: 1280px) {
+                .eyv-player-button, .eyv-pip-button {
+                    width: 56px !important;
+                    height: 56px !important;
+                }
+            }
+
             .eyv-player-button {
                 margin-left: 2px !important;
                 margin-right: -8px !important;

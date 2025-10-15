@@ -1040,17 +1040,25 @@
                 align-items: center !important;
                 justify-content: center !important;
                 padding: 0 !important;
-                width: var(--ytp-icon-button-size, 36px) !important;
-                height: var(--ytp-icon-button-size, 36px) !important;
+                width: 48px !important;
+                height: 40px !important;
                 fill: var(--ytp-icon-color, #cccccc) !important;
                 min-width: auto !important;
                 position: relative !important;
-                top: 2px !important;
-                margin: 0 6px !important;
-                opacity: 0.85;
-                transition: opacity 0.1s ease-in-out;
+                top: 0px !important;
+                margin: 0 !important;
                 cursor: pointer !important;
                 overflow: visible !important;
+            }
+
+            .eyv-player-button {
+                margin-left: 2px !important;
+                margin-right: -8px !important;
+            }
+
+            .eyv-pip-button {
+                margin-left: 0px !important;
+                margin-right: 2.5px !important;
             }
 
             .eyv-player-button svg, .eyv-pip-button svg { 

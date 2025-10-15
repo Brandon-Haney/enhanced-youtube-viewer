@@ -503,13 +503,32 @@
                     });
                     pipButtonsWithListeners.add(pipBtnInstance);
                 }
+                // Insert buttons into player controls with fallback logic for YouTube DOM changes
                 const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
-                if (settingsButton) {
-                    if (!playerRightControls.contains(pipBtnInstance) || (pipBtnInstance.nextSibling !== settingsButton && pipBtnInstance.parentNode === playerRightControls) ) playerRightControls.insertBefore(pipBtnInstance, settingsButton);
-                    if (!playerRightControls.contains(stickyButtonElement) || (stickyButtonElement.nextSibling !== pipBtnInstance && stickyButtonElement.parentNode === playerRightControls) ) playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
-                } else { 
+
+                // Check if settings button is a direct child of playerRightControls
+                const isSettingsButtonDirectChild = settingsButton && settingsButton.parentNode === playerRightControls;
+
+                if (isSettingsButtonDirectChild) {
+                    // Settings button is a direct child, safe to use insertBefore
+                    if (!playerRightControls.contains(pipBtnInstance)) {
+                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
+                    } else if (pipBtnInstance.nextSibling !== settingsButton) {
+                        // PiP button exists but not in correct position
+                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
+                    }
+
+                    if (!playerRightControls.contains(stickyButtonElement)) {
+                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
+                    } else if (stickyButtonElement.nextSibling !== pipBtnInstance) {
+                        // Sticky button exists but not in correct position
+                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
+                    }
+                } else {
+                    // Fallback: prepend buttons if settings button structure changed
+                    if (DEBUG) console.log('[EYV DBG] Settings button not direct child or not found, using prepend fallback');
                     if (!playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
-                    if (!playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement); 
+                    if (!playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
                 }
                 if (playerElementRef && !playerStateObserver) setupPlayerStateObserver(playerElementRef, videoElement);
                 if (playerElementRef && !videoElementObserver) setupVideoElementObserver(playerElementRef);
@@ -1016,9 +1035,9 @@
                 display: none;
             }
 
-            .eyv-player-button, .eyv-pip-button { 
-                display: inline-flex !important; 
-                align-items: center !important; 
+            .eyv-player-button, .eyv-pip-button {
+                display: inline-flex !important;
+                align-items: center !important;
                 justify-content: center !important;
                 padding: 0 !important;
                 width: var(--ytp-icon-button-size, 36px) !important;
@@ -1026,10 +1045,12 @@
                 fill: var(--ytp-icon-color, #cccccc) !important;
                 min-width: auto !important;
                 position: relative !important;
-                top: -12px !important;
+                top: 2px !important;
+                margin: 0 6px !important;
                 opacity: 0.85;
                 transition: opacity 0.1s ease-in-out;
                 cursor: pointer !important;
+                overflow: visible !important;
             }
 
             .eyv-player-button svg, .eyv-pip-button svg { 

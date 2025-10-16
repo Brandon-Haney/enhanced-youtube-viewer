@@ -81,6 +81,7 @@
             mainPollInterval = null;
             playerStateObserver = null;
             videoElementObserver = null;
+            stickyResizeObserver = null;
             currentVideoElement = null;
 
             if (DEBUG) console.log('[EYV DBG] Cleanup complete: all listeners, observers, intervals, and state flags reset.');
@@ -148,6 +149,7 @@
     let playerElementRef = null;
     let playerStateObserver = null;
     let videoElementObserver = null;
+    let stickyResizeObserver = null;
     let currentVideoElement = null;
     let wasStickyBeforeOsFullscreen = false;
     let wasStickyBeforePiP = false;
@@ -628,6 +630,12 @@
             Object.assign(playerElementRef.style, { width: '', height: '', top: '', left: '', transform: '' });
         }
         if (playerPlaceholder && playerPlaceholder.isConnected) playerPlaceholder.style.display = 'none';
+        // Disconnect ResizeObserver when sticky mode is deactivated
+        if (stickyResizeObserver) {
+            stickyResizeObserver.disconnect();
+            stickyResizeObserver = null;
+            if (DEBUG) console.log('[EYV DBG] ResizeObserver disconnected');
+        }
         stickyButtonElement.classList.remove('active');
         // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant (no user input)
         stickyButtonElement.innerHTML = pinSVGIcon;
@@ -705,6 +713,23 @@
                 } else { centerStickyPlayer(playerElement); }
                 // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
+
+                // Setup ResizeObserver for smooth real-time resizing
+                if (!stickyResizeObserver) {
+                    stickyResizeObserver = new ResizeObserver(() => {
+                        if (playerElementRef?.classList.contains('eyv-player-fixed')) {
+                            centerStickyPlayer(playerElementRef);
+                        }
+                    });
+
+                    // Observe the elements that determine player size
+                    const watchFlexy = document.querySelector('ytd-watch-flexy');
+                    const primaryCol = document.querySelector('#primary.ytd-watch-flexy');
+                    if (watchFlexy?.isConnected) stickyResizeObserver.observe(watchFlexy);
+                    if (primaryCol?.isConnected) stickyResizeObserver.observe(primaryCol);
+
+                    if (DEBUG) console.log('[EYV DBG] ResizeObserver setup for smooth resizing');
+                }
             } else { deactivateStickyModeInternal(); }
             } catch (error) {
                 console.error('[EYV] Sticky button click error:', error);

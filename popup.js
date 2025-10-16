@@ -9,14 +9,17 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
 
+    // Get DOM elements
+    const stickyPlayerCard = document.getElementById('stickyPlayerCard');
+    const pipCard = document.getElementById('pipCard');
     const defaultStickyToggle = document.getElementById('defaultStickyToggle');
     const inactiveWhenPausedToggle = document.getElementById('inactiveWhenPausedToggle');
     const inactiveAtEndToggle = document.getElementById('inactiveAtEndToggle');
-    const footerVersion = document.querySelector('footer p');
+    const versionText = document.getElementById('versionText');
     const saveIndicator = document.getElementById('saveIndicator');
 
     // Validate critical DOM elements exist
-    if (!defaultStickyToggle || !inactiveWhenPausedToggle || !inactiveAtEndToggle) {
+    if (!stickyPlayerCard || !pipCard || !defaultStickyToggle || !inactiveWhenPausedToggle || !inactiveAtEndToggle) {
         console.error('[EYV Popup] Critical DOM elements missing');
         return;
     }
@@ -65,13 +68,13 @@ document.addEventListener('DOMContentLoaded', function() {
     let inactiveAtEndTimer = null;
 
     // Set version dynamically with error handling
-    if (footerVersion) {
+    if (versionText) {
         try {
             const version = chrome.runtime.getManifest().version;
-            footerVersion.textContent = `Version ${version}`;
+            versionText.textContent = `v${version} • Active on YouTube`;
         } catch (error) {
             console.error('[EYV Popup] Failed to get manifest version:', error);
-            footerVersion.textContent = 'Version: Error';
+            versionText.textContent = 'v1.4 • Active on YouTube';
         }
     }
 
@@ -84,12 +87,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             if (tabs.length === 0) {
-                console.warn('[EYV Popup] No YouTube watch page found');
+                if (DEBUG) console.log('[EYV Popup] No YouTube watch page currently open - settings saved for next page load');
                 return;
             }
 
             // Send message to all YouTube watch tabs
             let successCount = 0;
+            let completeTabsCount = 0;
             tabs.forEach(tab => {
                 // Skip tabs that are still loading
                 if (tab.status !== 'complete') {
@@ -97,9 +101,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
 
+                completeTabsCount++;
                 chrome.tabs.sendMessage(tab.id, message, (response) => {
                     if (chrome.runtime.lastError) {
-                        console.warn(`[EYV Popup] Message error for tab ${tab.id}:`, chrome.runtime.lastError.message);
+                        if (DEBUG) console.log(`[EYV Popup] Tab ${tab.id} not ready:`, chrome.runtime.lastError.message);
                     } else if (response && response.status === 'ok') {
                         successCount++;
                         if (DEBUG) console.log(`[EYV Popup] Message sent successfully to tab ${tab.id}`);
@@ -107,16 +112,30 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
 
-            if (successCount === 0 && tabs.length > 0) {
-                console.warn('[EYV Popup] Content script may not be loaded in any tabs. Try refreshing.');
+            // Only warn if we had tabs to message but none responded
+            if (DEBUG && successCount === 0 && completeTabsCount > 0) {
+                console.log('[EYV Popup] Settings saved - will apply when you refresh YouTube pages');
             }
         });
+    }
+
+    // Update action card UI based on enabled state
+    function updateActionCardUI(card, statusElement, isEnabled) {
+        if (isEnabled) {
+            card.classList.add('active');
+            statusElement.textContent = 'Enabled';
+        } else {
+            card.classList.remove('active');
+            statusElement.textContent = 'Disabled';
+        }
     }
 
     // Load saved preferences for all settings with explicit defaults
     storageWithTimeout(() => {
         return new Promise((resolve, reject) => {
             chrome.storage.local.get({
+                stickyPlayerEnabled: true,
+                pipEnabled: true,
                 defaultStickyEnabled: false,
                 inactiveWhenPaused: false,
                 inactiveAtEnd: false
@@ -135,6 +154,14 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         console.log('[EYV Popup] Loaded settings:', result);
+
+        // Update action cards
+        const stickyStatus = stickyPlayerCard.querySelector('.action-status');
+        const pipStatus = pipCard.querySelector('.action-status');
+        updateActionCardUI(stickyPlayerCard, stickyStatus, result.stickyPlayerEnabled);
+        updateActionCardUI(pipCard, pipStatus, result.pipEnabled);
+
+        // Update checkboxes
         defaultStickyToggle.checked = result.defaultStickyEnabled;
         inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
         inactiveAtEndToggle.checked = result.inactiveAtEnd;
@@ -142,6 +169,82 @@ document.addEventListener('DOMContentLoaded', function() {
     .catch(error => {
         console.error('[EYV Popup] Storage error or timeout:', error);
         alert('Failed to load settings. Please refresh the popup.');
+    });
+
+    // Handle Sticky Player card click
+    stickyPlayerCard.addEventListener('click', function() {
+        const currentState = this.classList.contains('active');
+        const newState = !currentState;
+        const statusElement = this.querySelector('.action-status');
+
+        // Update UI immediately for responsiveness
+        updateActionCardUI(this, statusElement, newState);
+
+        // Save to storage
+        storageWithTimeout(() => {
+            return new Promise((resolve, reject) => {
+                chrome.storage.local.set({stickyPlayerEnabled: newState}, () => {
+                    if (chrome.runtime.lastError) {
+                        reject(chrome.runtime.lastError);
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+        })
+        .then(() => {
+            if (!isChromeContextValid()) {
+                updateActionCardUI(stickyPlayerCard, statusElement, !newState);
+                return;
+            }
+            showSaveConfirmation();
+            sendMessageToContentScript({ type: "FEATURE_TOGGLE", feature: 'stickyPlayer', enabled: newState });
+        })
+        .catch(error => {
+            console.error('[EYV Popup] Storage error:', error);
+            updateActionCardUI(stickyPlayerCard, statusElement, !newState);
+            if (error.message && error.message.includes('QUOTA')) {
+                alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+            }
+        });
+    });
+
+    // Handle PiP card click
+    pipCard.addEventListener('click', function() {
+        const currentState = this.classList.contains('active');
+        const newState = !currentState;
+        const statusElement = this.querySelector('.action-status');
+
+        // Update UI immediately for responsiveness
+        updateActionCardUI(this, statusElement, newState);
+
+        // Save to storage
+        storageWithTimeout(() => {
+            return new Promise((resolve, reject) => {
+                chrome.storage.local.set({pipEnabled: newState}, () => {
+                    if (chrome.runtime.lastError) {
+                        reject(chrome.runtime.lastError);
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+        })
+        .then(() => {
+            if (!isChromeContextValid()) {
+                updateActionCardUI(pipCard, statusElement, !newState);
+                return;
+            }
+            showSaveConfirmation();
+            sendMessageToContentScript({ type: "FEATURE_TOGGLE", feature: 'pip', enabled: newState });
+        })
+        .catch(error => {
+            console.error('[EYV Popup] Storage error:', error);
+            updateActionCardUI(pipCard, statusElement, !newState);
+            if (error.message && error.message.includes('QUOTA')) {
+                alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+            }
+        });
     });
 
     // Save preference when 'defaultStickyToggle' changes

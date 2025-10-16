@@ -8,77 +8,67 @@
 </head>
 <body>
     <div class="container">
-        <header>
-            <img src="icons/icon48.png" alt="Extension Icon" width="32" height="32">
-            <h1>Enhanced YouTube Viewer</h1>
-        </header>
-
-        <section class="intro">
-            <p>This extension enhances your YouTube watching experience with the following features:</p>
-        </section>
-
-        <section class="features-list">
-            <div class="feature-item">
-                <div class="feature-title">
-                    <span class="feature-icon">📌</span>
-                    <strong>Sticky Player</strong>
+        <div class="header">
+            <div class="header-content">
+                <span class="icon">📺</span>
+                <span class="title">Enhanced YouTube</span>
+            </div>
+            <div class="subtitle">Control your viewing experience</div>
+        </div>
+        <div class="content">
+            <div class="quick-actions">
+                <div class="action-card" id="stickyPlayerCard">
+                    <div class="action-icon">📌</div>
+                    <div class="action-title">Sticky Player</div>
+                    <div class="action-status">Enabled</div>
                 </div>
-                <p class="feature-description">
-                    Keep the video in view while scrolling. Toggle with the 📌 icon in player controls.
-                </p>
+                <div class="action-card" id="pipCard">
+                    <div class="action-icon">🖼️</div>
+                    <div class="action-title">Picture-in-Picture</div>
+                    <div class="action-status">Enabled</div>
+                </div>
             </div>
 
-            <div class="feature-item">
-                <div class="feature-title">
-                    <span class="feature-icon">
-                        <svg viewBox="0 0 24 24" style="width: 1.1em; height: 1.1em; vertical-align: -0.15em; fill: currentColor;">
-                            <path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/>
-                        </svg>
-                    </span>
-                    <strong>Picture-in-Picture</strong>
-                </div>
-                <p class="feature-description">
-                    Pop the video out to watch while multitasking. Toggle with the icon above in player controls.
-                </p>
-            </div>
-        </section>
+            <div class="settings-label">Sticky Player Options</div>
 
-        <section class="settings">
-            <h2>Settings</h2>
-            <div class="setting-group">
-                <h3>Sticky Player Settings</h3>
-                <div class="setting-item">
-                    <label for="defaultStickyToggle" title="Start videos in Sticky Mode automatically.">Default to on:</label>
-                    <label class="switch">
-                        <input type="checkbox" id="defaultStickyToggle">
-                        <span class="slider round"></span>
-                    </label>
+            <div class="setting-card">
+                <div class="setting-info">
+                    <div class="setting-name">Auto-Activate</div>
+                    <div class="setting-hint">Start in sticky mode on page load</div>
                 </div>
-                <div class="setting-item">
-                    <label for="inactiveWhenPausedToggle" title="Automatically deactivates sticky mode when the video is paused.">Deactivate when paused:</label>
-                    <label class="switch">
-                        <input type="checkbox" id="inactiveWhenPausedToggle">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-                <div class="setting-item">
-                    <label for="inactiveAtEndToggle" title="Automatically deactivates sticky mode when the video finishes.">Deactivate at video end:</label>
-                    <label class="switch">
-                        <input type="checkbox" id="inactiveAtEndToggle">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
+                <label class="checkbox">
+                    <input type="checkbox" id="defaultStickyToggle">
+                    <span class="checkbox-box"></span>
+                </label>
             </div>
-        </section>
 
-        <section class="status">
-            <p>Features are active on YouTube watch pages.</p>
+            <div class="setting-card">
+                <div class="setting-info">
+                    <div class="setting-name">Pause Deactivation</div>
+                    <div class="setting-hint">Turn off sticky when video pauses</div>
+                </div>
+                <label class="checkbox">
+                    <input type="checkbox" id="inactiveWhenPausedToggle">
+                    <span class="checkbox-box"></span>
+                </label>
+            </div>
+
+            <div class="setting-card">
+                <div class="setting-info">
+                    <div class="setting-name">End Deactivation</div>
+                    <div class="setting-hint">Turn off sticky when video ends</div>
+                </div>
+                <label class="checkbox">
+                    <input type="checkbox" id="inactiveAtEndToggle">
+                    <span class="checkbox-box"></span>
+                </label>
+            </div>
+
             <p id="saveIndicator" class="save-indicator" style="display: none;">✓ Settings saved</p>
-        </section>
-        
-        <footer>
-            <p>Version 1.3</p>
-        </footer>
+        </div>
+        <div class="footer">
+            <p id="versionText">v1.4 • Active on YouTube</p>
+        </div>
     </div>
     <script src="popup.js"></script>
 </body>

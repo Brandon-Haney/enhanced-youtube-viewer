@@ -64,6 +64,11 @@
                 clearTimeout(timeoutId);
             });
 
+            // Remove extension UI elements from DOM
+            document.querySelectorAll('.eyv-player-button, .eyv-pip-button').forEach(btn => btn.remove());
+            const placeholder = document.getElementById('eyv-player-placeholder');
+            if (placeholder) placeholder.remove();
+
             // Reset arrays
             this.listeners = [];
             this.observers = [];
@@ -75,6 +80,8 @@
             wasStickyBeforePause = false;
             wasStickyBeforePiP = false;
             wasStickyBeforeOsFullscreen = false;
+            wasStickyBeforeEnd = false;
+            wasStickyDuringCurrentVideo = false;
             isInitializing = false;
 
             // Null interval variables to prevent memory leaks
@@ -83,8 +90,9 @@
             videoElementObserver = null;
             stickyResizeObserver = null;
             currentVideoElement = null;
+            stickyButtonElement = null; // Clear button reference too
 
-            if (DEBUG) console.log('[EYV DBG] Cleanup complete: all listeners, observers, intervals, and state flags reset.');
+            if (DEBUG) console.log('[EYV DBG] Cleanup complete: all listeners, observers, intervals, state flags, and UI elements removed.');
         }
     };
 
@@ -157,6 +165,10 @@
     let isScrubbing = false;
     let inactiveWhenPausedEnabled = false;
     let inactiveAtEndEnabled = false;
+    let stickyPlayerEnabled = true; // Feature enable/disable
+    let pipEnabled = true; // Feature enable/disable
+    let wasStickyBeforeEnd = false; // Track if sticky was active when video ended
+    let wasStickyDuringCurrentVideo = false; // Track if sticky was EVER active during current video playback
 
     // WeakSets to track elements with attached listeners (survives element replacement)
     const videoElementsWithListeners = new WeakSet();
@@ -190,6 +202,150 @@
                 }
                 sendResponse({ status: "ok" });
                 return true; // Keep channel open for async response
+            }
+
+            if (message.type === "FEATURE_TOGGLE") {
+                if (DEBUG) console.log(`[EYV DBG] Received feature toggle: ${message.feature} = ${message.enabled}`);
+                // Validate message.enabled is a boolean
+                if (typeof message.enabled !== 'boolean') {
+                    console.warn('[EYV] Invalid enabled value type:', typeof message.enabled);
+                    sendResponse({ status: "error", message: "Invalid value type" });
+                    return true;
+                }
+
+                if (message.feature === 'stickyPlayer') {
+                    stickyPlayerEnabled = message.enabled;
+                    const stickyBtn = document.querySelector('.eyv-player-button');
+
+                    if (message.enabled) {
+                        // ENABLE: Create button if it doesn't exist
+                        if (!stickyBtn) {
+                            const player = document.querySelector('ytd-player');
+                            const playerRightControls = player?.querySelector('.ytp-right-controls');
+                            const videoElement = player?.querySelector('video.html5-main-video');
+
+                            if (player && playerRightControls && videoElement) {
+                                // Create the button
+                                stickyButtonElement = createStickyButtonLogic(player, videoElement);
+                                Object.assign(stickyButtonElement, {
+                                    className: 'ytp-button eyv-player-button',
+                                    title: 'Toggle Sticky Player',
+                                    innerHTML: pinSVGIcon
+                                });
+                                stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+
+                                // Insert it in the correct position
+                                const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+                                const pipBtn = playerRightControls.querySelector('.eyv-pip-button');
+
+                                if (settingsButton && settingsButton.parentNode === playerRightControls) {
+                                    playerRightControls.insertBefore(stickyButtonElement, pipBtn || settingsButton);
+                                } else {
+                                    playerRightControls.prepend(stickyButtonElement);
+                                }
+
+                                if (DEBUG) console.log('[EYV DBG] Sticky player button created');
+                            } else {
+                                if (DEBUG) console.log('[EYV DBG] Cannot create sticky button - player elements not found');
+                            }
+                        }
+                    } else {
+                        // DISABLE: Remove button if it exists
+                        if (stickyBtn) {
+                            // Deactivate sticky mode if active
+                            if (stickyBtn.classList.contains('active')) {
+                                stickyBtn.click();
+                            }
+                            stickyBtn.remove();
+                            stickyButtonElement = null;
+                            if (DEBUG) console.log('[EYV DBG] Sticky player button removed');
+                        }
+                    }
+                } else if (message.feature === 'pip') {
+                    pipEnabled = message.enabled;
+                    const pipBtn = document.querySelector('.eyv-pip-button');
+
+                    if (message.enabled) {
+                        // ENABLE: Create button if it doesn't exist
+                        if (!pipBtn) {
+                            const player = document.querySelector('ytd-player');
+                            const playerRightControls = player?.querySelector('.ytp-right-controls');
+                            const videoElement = player?.querySelector('video.html5-main-video');
+
+                            if (player && playerRightControls && videoElement) {
+                                // Create the button
+                                const pipBtnInstance = createPiPButtonLogic(videoElement);
+                                Object.assign(pipBtnInstance, {
+                                    className: 'ytp-button eyv-pip-button',
+                                    title: 'Toggle Picture-in-Picture',
+                                    innerHTML: pipSVGDefault
+                                });
+                                pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
+
+                                // Attach PiP event listeners
+                                if (!pipButtonsWithListeners.has(pipBtnInstance)) {
+                                    if (document.pictureInPictureElement === videoElement) {
+                                        pipBtnInstance.classList.add('active');
+                                        pipBtnInstance.innerHTML = pipSVGActive;
+                                    }
+
+                                    cleanupRegistry.addListener(videoElement, 'enterpictureinpicture', () => {
+                                        try {
+                                            if (document.pictureInPictureElement === videoElement && pipBtnInstance) {
+                                                pipBtnInstance.classList.add('active');
+                                                pipBtnInstance.innerHTML = pipSVGActive;
+                                                if (stickyButtonElement?.classList.contains('active')) {
+                                                    wasStickyBeforePiP = true;
+                                                    if (DEBUG) console.log("[EYV DBG] OS PiP entered. Deactivating sticky.");
+                                                    deactivateStickyModeInternal();
+                                                }
+                                            }
+                                        } catch (error) {
+                                            console.error('[EYV] Enter PiP handler error:', error);
+                                        }
+                                    });
+
+                                    cleanupRegistry.addListener(videoElement, 'leavepictureinpicture', () => {
+                                        try {
+                                            if (pipBtnInstance) {
+                                                pipBtnInstance.classList.remove('active');
+                                                pipBtnInstance.innerHTML = pipSVGDefault;
+                                            }
+                                            if (DEBUG) console.log("[EYV DBG] OS 'leavepictureinpicture' event. wasStickyBeforePiP:", wasStickyBeforePiP);
+                                            tryReactivatingStickyAfterPiPOrMiniplayer(videoElement);
+                                            wasStickyBeforePiP = false;
+                                        } catch (error) {
+                                            console.error('[EYV] Leave PiP handler error:', error);
+                                        }
+                                    });
+
+                                    pipButtonsWithListeners.add(pipBtnInstance);
+                                }
+
+                                // Insert it in the correct position
+                                const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+
+                                if (settingsButton && settingsButton.parentNode === playerRightControls) {
+                                    playerRightControls.insertBefore(pipBtnInstance, settingsButton);
+                                } else {
+                                    playerRightControls.prepend(pipBtnInstance);
+                                }
+
+                                if (DEBUG) console.log('[EYV DBG] PiP button created');
+                            } else {
+                                if (DEBUG) console.log('[EYV DBG] Cannot create PiP button - player elements not found');
+                            }
+                        }
+                    } else {
+                        // DISABLE: Remove button if it exists
+                        if (pipBtn) {
+                            pipBtn.remove();
+                            if (DEBUG) console.log('[EYV DBG] PiP button removed');
+                        }
+                    }
+                }
+                sendResponse({ status: "ok" });
+                return true;
             }
 
             // Send error response for unrecognized message types
@@ -268,6 +424,8 @@
         defaultStickyEnabled: null,
         inactiveWhenPaused: null,
         inactiveAtEnd: null,
+        stickyPlayerEnabled: null,
+        pipEnabled: null,
         loaded: false
     };
 
@@ -364,31 +522,79 @@
         // Function to initialize when all controls are found
         const initializeControls = () => {
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
-                stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
-                if (!stickyButtonElement) {
-                    stickyButtonElement = createStickyButtonLogic(player, videoElement);
-                    // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant defined in extension code (no user input)
-                    Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Toggle Sticky Player', innerHTML: pinSVGIcon });
-                    stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
-                }
-                let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
-                if (!pipBtnInstance) {
-                    pipBtnInstance = createPiPButtonLogic(videoElement);
-                    // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant defined in extension code (no user input)
-                    Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
-                    pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
-                }
-                
+
+                // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd'])
+                    .then(settings => {
+                        stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
+                        pipEnabled = settings.pipEnabled !== false; // Default to true
+                        inactiveWhenPausedEnabled = !!(settings && settings.inactiveWhenPaused);
+                        inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
+                        const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
+                        if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
+
+                        // Only create sticky player button if enabled
+                        stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
+                        if (!stickyButtonElement && stickyPlayerEnabled) {
+                            stickyButtonElement = createStickyButtonLogic(player, videoElement);
+                            // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant defined in extension code (no user input)
+                            Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Toggle Sticky Player', innerHTML: pinSVGIcon });
+                            stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                        } else if (stickyButtonElement && !stickyPlayerEnabled) {
+                            // Button exists but should be hidden
+                            stickyButtonElement.remove();
+                            stickyButtonElement = null;
+                        }
+
+                        // Only create PiP button if enabled
+                        let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
+                        if (!pipBtnInstance && pipEnabled) {
+                            pipBtnInstance = createPiPButtonLogic(videoElement);
+                            // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant defined in extension code (no user input)
+                            Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
+                            pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
+                        } else if (pipBtnInstance && !pipEnabled) {
+                            // Button exists but should be hidden
+                            pipBtnInstance.remove();
+                            pipBtnInstance = null;
+                        }
+
+                        // Continue with the rest of initialization
+                        initializeControlsContinued(pipBtnInstance, defaultStickyEnabled);
+                    })
+                    .catch(error => {
+                        console.error('[EYV] Failed to load feature settings:', error);
+                        // Default to enabled on error
+                        stickyPlayerEnabled = true;
+                        pipEnabled = true;
+                        inactiveWhenPausedEnabled = false;
+                        inactiveAtEndEnabled = false;
+                        const defaultStickyEnabled = false;
+
+                        // Create buttons with default enabled state
+                        stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
+                        if (!stickyButtonElement) {
+                            stickyButtonElement = createStickyButtonLogic(player, videoElement);
+                            Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Toggle Sticky Player', innerHTML: pinSVGIcon });
+                            stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                        }
+
+                        let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
+                        if (!pipBtnInstance) {
+                            pipBtnInstance = createPiPButtonLogic(videoElement);
+                            Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
+                            pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
+                        }
+
+                        initializeControlsContinued(pipBtnInstance, defaultStickyEnabled);
+                    });
+        };
+
+        // Continuation of initialization after settings are loaded
+        const initializeControlsContinued = (pipBtnInstance, defaultStickyEnabled) => {
+
                 if (!videoElementsWithListeners.has(videoElement)) {
-                    loadSettings(['inactiveWhenPaused', 'inactiveAtEnd'])
-                        .then(settings => {
-                            inactiveWhenPausedEnabled = !!(settings && settings.inactiveWhenPaused);
-                            inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
-                            if (DEBUG) console.log(`[EYV DBG] Loaded settings: inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
-                        })
-                        .catch(error => {
-                            console.error('[EYV] Failed to load settings:', error);
-                        });
+                    // Settings already loaded in initializeControls(), no need to load again
 
                     if (!progressBar.dataset.eyvScrubListener) {
                         cleanupRegistry.addListener(progressBar, 'mousedown', () => {
@@ -428,6 +634,14 @@
                                 if (DEBUG) console.log("[EYV DBG] Paused, but ignored because ad is playing.");
                                 return;
                             }
+
+                            // Check if video ended (video is paused AND currentTime is at or very near the end)
+                            const isVideoEnded = videoElement.currentTime >= videoElement.duration - 0.5;
+                            if (isVideoEnded) {
+                                if (DEBUG) console.log("[EYV DBG] Paused because video ended (currentTime >= duration). Ignoring pause deactivation.");
+                                return;
+                            }
+
                             if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active')) {
                                 if (DEBUG) console.log("[EYV DBG] Paused. Deactivating sticky mode as per settings.");
                                 // Set flag AFTER deactivating to prevent it from being reset
@@ -441,6 +655,7 @@
 
                     cleanupRegistry.addListener(videoElement, 'play', () => {
                         try {
+                            // Handle re-activation after pause
                             if (inactiveWhenPausedEnabled && wasStickyBeforePause) {
                                 wasStickyBeforePause = false; // Consume the flag
                                 const ytdApp = document.querySelector('ytd-app');
@@ -453,6 +668,9 @@
                                     }
                                 }
                             }
+
+                            // Note: Re-activation after video ended is now handled in 'loadeddata' event
+                            // which is more reliable for autoplay scenarios where URL changes
                         } catch (error) {
                             console.error('[EYV] Video play handler error:', error);
                         }
@@ -460,9 +678,24 @@
 
                     cleanupRegistry.addListener(videoElement, 'ended', () => {
                         try {
-                            if (inactiveAtEndEnabled && stickyButtonElement?.classList.contains('active')) {
-                                if (DEBUG) console.log("[EYV DBG] Video ended. Deactivating sticky mode as per settings.");
-                                deactivateStickyModeInternal();
+                            if (DEBUG) console.log("[EYV DBG] Video ended. inactiveAtEndEnabled:", inactiveAtEndEnabled, "sticky currently active:", stickyButtonElement?.classList.contains('active'), "wasStickyDuringCurrentVideo:", wasStickyDuringCurrentVideo);
+
+                            // Check if sticky was EVER active during this video, not just currently active
+                            // This handles the case where "Pause Deactivation" already turned off sticky
+                            if (inactiveAtEndEnabled && wasStickyDuringCurrentVideo) {
+                                if (DEBUG) console.log("[EYV DBG] Video ended and sticky was active during playback. Setting re-activation flag.");
+                                wasStickyBeforeEnd = true; // Remember that sticky was active during this video
+                                // Persist to sessionStorage so it survives YouTube SPA navigation
+                                try {
+                                    sessionStorage.setItem('eyv-wasStickyBeforeEnd', 'true');
+                                    if (DEBUG) console.log('[EYV DBG] Set sessionStorage flag: eyv-wasStickyBeforeEnd = true');
+                                } catch (e) {
+                                    console.error('[EYV] Could not set sessionStorage:', e);
+                                }
+                                // Only deactivate if it's still active
+                                if (stickyButtonElement?.classList.contains('active')) {
+                                    deactivateStickyModeInternal();
+                                }
                             }
                         } catch (error) {
                             console.error('[EYV] Video ended handler error:', error);
@@ -472,13 +705,13 @@
                     videoElementsWithListeners.add(videoElement);
                 }
                 
-                if (!pipButtonsWithListeners.has(pipBtnInstance)) {
+                if (pipBtnInstance && !pipButtonsWithListeners.has(pipBtnInstance)) {
                     // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
                     if (document.pictureInPictureElement === videoElement) { pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; }
 
                     cleanupRegistry.addListener(videoElement, 'enterpictureinpicture', () => {
                         try {
-                            if (document.pictureInPictureElement === videoElement) {
+                            if (document.pictureInPictureElement === videoElement && pipBtnInstance) {
                                 // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
                                 pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive;
                                 // If sticky is active when PiP is entered (e.g. via browser button/keyboard), deactivate it
@@ -494,8 +727,10 @@
                     });
                     cleanupRegistry.addListener(videoElement, 'leavepictureinpicture', () => {
                         try {
-                            // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant (no user input)
-                            pipBtnInstance.classList.remove('active'); pipBtnInstance.innerHTML = pipSVGDefault;
+                            if (pipBtnInstance) {
+                                // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant (no user input)
+                                pipBtnInstance.classList.remove('active'); pipBtnInstance.innerHTML = pipSVGDefault;
+                            }
                             if (DEBUG) console.log("[EYV DBG] OS 'leavepictureinpicture' event. wasStickyBeforePiP:", wasStickyBeforePiP);
                             tryReactivatingStickyAfterPiPOrMiniplayer(videoElement);
                             wasStickyBeforePiP = false;
@@ -513,24 +748,24 @@
 
                 if (isSettingsButtonDirectChild) {
                     // Settings button is a direct child, safe to use insertBefore
-                    if (!playerRightControls.contains(pipBtnInstance)) {
+                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) {
                         playerRightControls.insertBefore(pipBtnInstance, settingsButton);
-                    } else if (pipBtnInstance.nextSibling !== settingsButton) {
+                    } else if (pipBtnInstance && pipBtnInstance.nextSibling !== settingsButton) {
                         // PiP button exists but not in correct position
                         playerRightControls.insertBefore(pipBtnInstance, settingsButton);
                     }
 
-                    if (!playerRightControls.contains(stickyButtonElement)) {
-                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
-                    } else if (stickyButtonElement.nextSibling !== pipBtnInstance) {
+                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) {
+                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance || settingsButton);
+                    } else if (stickyButtonElement && pipBtnInstance && stickyButtonElement.nextSibling !== pipBtnInstance) {
                         // Sticky button exists but not in correct position
                         playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
                     }
                 } else {
                     // Fallback: prepend buttons if settings button structure changed
                     if (DEBUG) console.log('[EYV DBG] Settings button not direct child or not found, using prepend fallback');
-                    if (!playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
-                    if (!playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
+                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
+                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
                 }
                 if (playerElementRef && !playerStateObserver) setupPlayerStateObserver(playerElementRef, videoElement);
                 if (playerElementRef && !videoElementObserver) setupVideoElementObserver(playerElementRef);
@@ -538,20 +773,70 @@
                 // Initialize current video element reference
                 currentVideoElement = videoElement;
 
-                // Load defaultStickyEnabled setting
-                loadSettings(['defaultStickyEnabled'])
-                    .then(result => {
-                        if (result && result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
-                            const ytdApp = document.querySelector('ytd-app');
-                            const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
-                            const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
-                            if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) stickyButtonElement.click();
+                // Check sessionStorage for re-activation after video ended
+                let shouldReactivateAfterEnd = false;
+                try {
+                    const storageValue = sessionStorage.getItem('eyv-wasStickyBeforeEnd');
+                    if (DEBUG) console.log('[EYV DBG] Checking sessionStorage for wasStickyBeforeEnd:', storageValue);
+
+                    if (storageValue === 'true') {
+                        shouldReactivateAfterEnd = true;
+                        sessionStorage.removeItem('eyv-wasStickyBeforeEnd');
+                        if (DEBUG) console.log('[EYV DBG] Found flag in sessionStorage - will re-activate sticky mode');
+                    }
+                } catch (e) {
+                    console.error('[EYV] Could not read sessionStorage:', e);
+                }
+
+                // Auto-activate sticky mode if defaultStickyEnabled is true OR if previous video ended with sticky active
+                if ((defaultStickyEnabled || (inactiveAtEndEnabled && shouldReactivateAfterEnd)) && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
+                    const ytdApp = document.querySelector('ytd-app');
+                    const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
+                    const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
+                    if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) {
+                        if (defaultStickyEnabled) {
+                            if (DEBUG) console.log('[EYV DBG] Auto-activating sticky mode (defaultStickyEnabled=true)');
                         }
-                    })
-                    .catch(error => {
-                        console.error('[EYV] Failed to load defaultStickyEnabled setting:', error);
-                    });
-        };
+                        if (shouldReactivateAfterEnd) {
+                            if (DEBUG) console.log('[EYV DBG] Auto-activating sticky mode (re-activating after video ended)');
+                        }
+
+                        // Delay activation to ensure player is fully ready
+                        // Use longer delay for autoplay scenarios where player may still be initializing
+                        const activationDelay = shouldReactivateAfterEnd ? 500 : 200;
+                        if (DEBUG) console.log(`[EYV DBG] Scheduling sticky activation in ${activationDelay}ms...`);
+
+                        setTimeout(() => {
+                            if (DEBUG) console.log('[EYV DBG] Auto-activation timer fired. Checking button state...');
+                            if (!stickyButtonElement) {
+                                if (DEBUG) console.log('[EYV DBG] Button no longer exists, skipping activation');
+                                return;
+                            }
+                            if (stickyButtonElement.classList.contains('active')) {
+                                if (DEBUG) console.log('[EYV DBG] Button already active, skipping click');
+                                return;
+                            }
+
+                            // Double-check player is ready
+                            const playerReady = playerElementRef && videoElement && !videoElement.paused;
+                            if (DEBUG) console.log(`[EYV DBG] Player ready check: playerRef=${!!playerElementRef}, video=${!!videoElement}, playing=${videoElement && !videoElement.paused}`);
+
+                            if (DEBUG) console.log('[EYV DBG] Clicking sticky button to activate...');
+                            stickyButtonElement.click();
+                        }, activationDelay);
+                    } else {
+                        if (DEBUG) console.log('[EYV DBG] Cannot auto-activate: conflicting mode active (PiP/mini/fullscreen)');
+                    }
+                } else if (DEBUG) {
+                    if (!stickyButtonElement) {
+                        console.log('[EYV DBG] No auto-activation: button does not exist');
+                    } else if (stickyButtonElement.classList.contains('active')) {
+                        console.log('[EYV DBG] No auto-activation: button already active');
+                    } else {
+                        console.log('[EYV DBG] No auto-activation: conditions not met');
+                    }
+                }
+        }; // End of initializeControlsContinued
 
         // Check if controls are already present
         if (playerRightControls && videoElement && progressBar) {
@@ -654,11 +939,12 @@
 
         const clickHandler = (event) => {
             try {
+                if (DEBUG) console.log('[EYV DBG Click] Click handler entered');
                 event.stopPropagation();
 
                 // Prevent rapid clicking during transitions
                 if (isTransitioning) {
-                    if (DEBUG) console.log('[EYV DBG] Button click ignored - transition in progress');
+                    if (DEBUG) console.log('[EYV DBG Click] Button click ignored - transition in progress');
                     return;
                 }
 
@@ -667,17 +953,34 @@
 
                 wasStickyBeforePause = false; // Manual click resets pause-related state
                 const currentlySticky = button.classList.contains('active');
+                if (DEBUG) console.log(`[EYV DBG Click] currentlySticky=${currentlySticky}`);
             if (!currentlySticky) {
+                if (DEBUG) console.log('[EYV DBG Click] Attempting to activate sticky mode');
                 const ytdApp = document.querySelector('ytd-app');
                 const watchFlexy = document.querySelector('ytd-watch-flexy');
-                if (document.pictureInPictureElement === videoElementForPiPWatch || ytdApp?.hasAttribute('miniplayer-is-active') || ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement) {
-                    console.log("[EYV] Cannot activate sticky: conflicting mode active."); return;
+
+                const isPiP = document.pictureInPictureElement === videoElementForPiPWatch;
+                const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
+                const isYtFull = ytdApp?.hasAttribute('fullscreen');
+                const isOsFull = !!document.fullscreenElement;
+
+                if (DEBUG) console.log(`[EYV DBG Click] Conflict check: PiP=${isPiP}, mini=${isMini}, ytFull=${isYtFull}, osFull=${isOsFull}`);
+
+                if (isPiP || isMini || isYtFull || isOsFull) {
+                    console.log("[EYV] Cannot activate sticky: conflicting mode active.");
+                    if (DEBUG) console.log('[EYV DBG Click] Returning early due to conflicting mode');
+                    return;
                 }
+
+                if (DEBUG) console.log('[EYV DBG Click] Getting player dimensions...');
                 const rect = playerElement.getBoundingClientRect();
                 const initialWidth = rect.width; const initialHeight = rect.height;
                 const initialLeft = rect.left; const initialTop = rect.top;
+                if (DEBUG) console.log(`[EYV DBG Click] Player dimensions: ${initialWidth}x${initialHeight} at (${initialLeft},${initialTop})`);
+
                 if (initialHeight === 0 || initialWidth === 0) {
                     console.warn('[EYV] Cannot activate sticky: player dimensions are zero (may be transitioning)');
+                    if (DEBUG) console.log('[EYV DBG Click] Returning early due to zero dimensions');
                     return;
                 }
 
@@ -707,12 +1010,16 @@
                 }
                 playerElement.classList.add('eyv-player-fixed');
                 const isTheater = watchFlexy?.hasAttribute('theater');
-                const isYtFull = ytdApp?.hasAttribute('fullscreen');
+                // Re-use isYtFull already declared above
                 if (!isTheater && !isYtFull && !document.fullscreenElement) {
                     Object.assign(playerElement.style, { width: `${initialWidth}px`, height: `${initialHeight}px`, left: `${initialLeft}px`, top: `${initialTop}px`, transform: 'translateX(0%)' });
                 } else { centerStickyPlayer(playerElement); }
                 // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
+
+                // Track that sticky was active during this video for "End Deactivation" re-activation
+                wasStickyDuringCurrentVideo = true;
+                if (DEBUG) console.log('[EYV DBG] Sticky activated - set wasStickyDuringCurrentVideo = true');
 
                 // Setup ResizeObserver for smooth real-time resizing
                 if (!stickyResizeObserver) {

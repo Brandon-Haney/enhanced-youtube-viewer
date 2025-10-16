@@ -1070,7 +1070,7 @@
                 fill: var(--ytp-icon-color, #cccccc) !important;
                 min-width: auto !important;
                 position: relative !important;
-                top: 0px !important;
+                top: -3px !important;
                 margin: 0 !important;
                 cursor: pointer !important;
                 overflow: visible !important;

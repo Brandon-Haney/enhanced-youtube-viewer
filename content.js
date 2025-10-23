@@ -69,6 +69,11 @@
             const placeholder = document.getElementById('eyv-player-placeholder');
             if (placeholder) placeholder.remove();
 
+            // NOTE: We don't clean up the sticky player element here during navigation-start
+            // because doing so would interfere with YouTube's miniplayer activation when
+            // navigating away from a watch page. Sticky player cleanup happens during
+            // navigation-finish when arriving at a new watch page instead.
+
             // Reset arrays
             this.listeners = [];
             this.observers = [];
@@ -102,6 +107,29 @@
     window.addEventListener('yt-navigate-start', () => {
         try {
             if (DEBUG) console.log('[EYV DBG] YouTube navigation starting, cleaning up...');
+
+            // Only clean up if sticky mode was actually active
+            if (stickyButtonElement?.classList.contains('active')) {
+                if (DEBUG) console.log('[EYV DBG] Sticky mode was active, deactivating before navigation');
+
+                // Use playerElementRef if available
+                if (playerElementRef && playerElementRef.isConnected) {
+                    playerElementRef.classList.remove('eyv-player-fixed');
+                    // Only clear inline styles if the element has our class
+                    playerElementRef.style.removeProperty('width');
+                    playerElementRef.style.removeProperty('height');
+                    playerElementRef.style.removeProperty('left');
+                    playerElementRef.style.removeProperty('top');
+                    playerElementRef.style.removeProperty('transform');
+                    if (DEBUG) console.log('[EYV DBG] Cleared sticky styles from player');
+                }
+
+                const placeholder = document.getElementById('eyv-player-placeholder');
+                if (placeholder) placeholder.style.display = 'none';
+            } else {
+                if (DEBUG) console.log('[EYV DBG] Sticky mode not active, skipping cleanup');
+            }
+
             cleanupRegistry.cleanup();
             // Reset initialization guard so we can reinitialize after navigation
             window.eyvHasRun = false;
@@ -116,6 +144,22 @@
             // Only reinitialize if we're on a watch page
             if (window.location.pathname === '/watch' && !window.eyvHasRun) {
                 if (DEBUG) console.log('[EYV DBG] On watch page, reinitializing...');
+
+                // Clean up sticky player from previous video to prevent interference
+                const stickyPlayer = document.querySelector('.eyv-player-fixed');
+                if (stickyPlayer) {
+                    stickyPlayer.classList.remove('eyv-player-fixed');
+                    Object.assign(stickyPlayer.style, {
+                        width: '',
+                        height: '',
+                        left: '',
+                        top: '',
+                        transform: '',
+                        position: '',
+                        zIndex: ''
+                    });
+                }
+
                 // Re-run the initialization by resetting the guard and starting the poller
                 window.eyvHasRun = true;
                 initializeMainPoller();
@@ -767,6 +811,10 @@
                     if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
                     if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
                 }
+
+                // Sync our button dimensions with YouTube's native buttons
+                syncButtonDimensions();
+
                 if (playerElementRef && !playerStateObserver) setupPlayerStateObserver(playerElementRef, videoElement);
                 if (playerElementRef && !videoElementObserver) setupVideoElementObserver(playerElementRef);
 
@@ -898,8 +946,14 @@
 
         // Register window and document event listeners (debounce resize for performance)
         const debouncedResize = debounce(() => {
+            // Sync button dimensions on resize
+            syncButtonDimensions();
+
             if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                centerStickyPlayer(playerElementRef);
+                // Use requestAnimationFrame to ensure layout is complete before reading dimensions
+                requestAnimationFrame(() => {
+                    centerStickyPlayer(playerElementRef);
+                });
             }
         }, RESIZE_DEBOUNCE_MS);
         cleanupRegistry.addListener(window, 'resize', debouncedResize);
@@ -932,6 +986,28 @@
         wasStickyBeforeOsFullscreen = false;
     }
     
+    // --- SYNC BUTTON DIMENSIONS WITH YOUTUBE ---
+    function syncButtonDimensions() {
+        // Find a native YouTube button to copy dimensions from
+        const nativeButton = document.querySelector('.ytp-settings-button') ||
+                             document.querySelector('.ytp-fullscreen-button');
+
+        if (!nativeButton) return;
+
+        const computedStyle = getComputedStyle(nativeButton);
+        const width = computedStyle.width;
+        const height = computedStyle.height;
+
+        // Apply to all our buttons
+        const ourButtons = document.querySelectorAll('.eyv-player-button, .eyv-pip-button');
+        ourButtons.forEach(btn => {
+            btn.style.width = width;
+            btn.style.height = height;
+        });
+
+        if (DEBUG) console.log(`[EYV DBG] Synced button dimensions to ${width} x ${height}`);
+    }
+
     // --- STICKY PLAYER LOGIC ---
     function createStickyButtonLogic(playerElement, videoElementForPiPWatch) {
         const button = document.createElement('button');
@@ -1025,7 +1101,10 @@
                 if (!stickyResizeObserver) {
                     stickyResizeObserver = new ResizeObserver(() => {
                         if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                            centerStickyPlayer(playerElementRef);
+                            // Use requestAnimationFrame to ensure smooth resize
+                            requestAnimationFrame(() => {
+                                centerStickyPlayer(playerElementRef);
+                            });
                         }
                     });
 
@@ -1099,7 +1178,10 @@
                     if (attr === 'fullscreen' && watchFlexy.hasAttribute(attr)) {
                         shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] YT Fullscreen (watch-flexy) ACTIVATED.");
                     } else if (attr === 'theater') {
-                        shouldRecenter = true; if (DEBUG) console.log("[EYV DBG MO] Theater mode toggled (watch-flexy).");
+                        shouldRecenter = true;
+                        if (DEBUG) console.log("[EYV DBG MO] Theater mode toggled (watch-flexy).");
+                        // Sync button dimensions when theater mode toggles
+                        syncButtonDimensions();
                     }
                 } else if (target === playerNodeToObserve && attr === 'class') {
                     if (playerNodeToObserve.classList.contains('ytp-fullscreen')) {
@@ -1322,13 +1404,10 @@
         const style = document.createElement('style');
         style.id = 'eyv-styles';
 
-        // Calculate appropriate z-index (masthead + 1, or default to 2100)
-        const masthead = document.querySelector('#masthead-container ytd-masthead') || document.querySelector('#masthead-container');
-        let zIndex = 2100;
-        const mastheadZIndex = masthead ? parseInt(getComputedStyle(masthead).zIndex) : NaN;
-        if (!isNaN(mastheadZIndex) && mastheadZIndex > 0) {
-            zIndex = mastheadZIndex + 1;
-        }
+        // Calculate appropriate z-index - should be above main content but below YouTube's sidebar drawer
+        // YouTube's sidebar drawer (tp-yt-app-drawer) has z-index 2030
+        // Setting sticky player to 2020 ensures it appears above content but below sidebar/modals
+        const zIndex = 2020;
 
         style.textContent = `
             .eyv-player-fixed {
@@ -1372,8 +1451,7 @@
                 align-items: center !important;
                 justify-content: center !important;
                 padding: 0 !important;
-                width: 48px !important;
-                height: 40px !important;
+                /* Width and height set dynamically via JavaScript to match YouTube's buttons */
                 fill: var(--ytp-icon-color, #cccccc) !important;
                 min-width: auto !important;
                 position: relative !important;
@@ -1381,23 +1459,6 @@
                 margin: 0 !important;
                 cursor: pointer !important;
                 overflow: visible !important;
-            }
-
-            @media (min-width: 1280px) {
-                .eyv-player-button, .eyv-pip-button {
-                    width: 56px !important;
-                    height: 56px !important;
-                }
-            }
-
-            .eyv-player-button {
-                margin-left: 2px !important;
-                margin-right: -8px !important;
-            }
-
-            .eyv-pip-button {
-                margin-left: 0px !important;
-                margin-right: 2.5px !important;
             }
 
             .eyv-player-button svg, .eyv-pip-button svg { 

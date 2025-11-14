@@ -817,6 +817,7 @@
 
                 if (playerElementRef && !playerStateObserver) setupPlayerStateObserver(playerElementRef, videoElement);
                 if (playerElementRef && !videoElementObserver) setupVideoElementObserver(playerElementRef);
+                setupLiveChatObserver(); // Setup chat observer (will retry if not ready)
 
                 // Initialize current video element reference
                 currentVideoElement = videoElement;
@@ -969,6 +970,12 @@
             Object.assign(playerElementRef.style, { width: '', height: '', top: '', left: '', transform: '' });
         }
         if (playerPlaceholder && playerPlaceholder.isConnected) playerPlaceholder.style.display = 'none';
+
+        // NOTE: Known issue with "Inactive When Paused" feature:
+        // When sticky is deactivated on pause, the player loses position:fixed and returns to document flow.
+        // When reactivated on resume, position:fixed is reapplied with top:mastheadOffset, causing a visual jump.
+        // This is the expected behavior of the feature - the player becomes scrollable when paused.
+        // To avoid the jump, users should disable "Inactive When Paused" in settings.
         // Disconnect ResizeObserver when sticky mode is deactivated
         if (stickyResizeObserver) {
             stickyResizeObserver.disconnect();
@@ -992,11 +999,22 @@
         const nativeButton = document.querySelector('.ytp-settings-button') ||
                              document.querySelector('.ytp-fullscreen-button');
 
-        if (!nativeButton) return;
+        if (!nativeButton) {
+            if (DEBUG) console.log('[EYV DBG] No native button found for sync');
+            return;
+        }
 
         const computedStyle = getComputedStyle(nativeButton);
         const width = computedStyle.width;
         const height = computedStyle.height;
+
+        if (DEBUG) {
+            const watchFlexy = document.querySelector('ytd-watch-flexy');
+            const isTheater = watchFlexy?.hasAttribute('theater');
+            const playerEl = document.querySelector('#movie_player');
+            const isFullscreen = playerEl?.classList.contains('ytp-fullscreen');
+            console.log(`[EYV DBG] Syncing buttons - Theater: ${isTheater}, Fullscreen: ${isFullscreen}, Native button size: ${width} x ${height}`);
+        }
 
         // Apply to all our buttons
         const ourButtons = document.querySelectorAll('.eyv-player-button, .eyv-pip-button');
@@ -1005,7 +1023,7 @@
             btn.style.height = height;
         });
 
-        if (DEBUG) console.log(`[EYV DBG] Synced button dimensions to ${width} x ${height}`);
+        if (DEBUG) console.log(`[EYV DBG] Applied ${width} x ${height} to ${ourButtons.length} buttons`);
     }
 
     // --- STICKY PLAYER LOGIC ---
@@ -1078,18 +1096,25 @@
                     }
                 }
                 if (playerPlaceholder.isConnected) {
-                    playerPlaceholder.style.width = `${initialWidth}px`; playerPlaceholder.style.height = `${initialHeight}px`;
                     // Sanitize CSS color value from YouTube page to prevent injection
                     const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--yt-spec-base-background');
                     playerPlaceholder.style.backgroundColor = sanitizeColorValue(bgColor);
-                    playerPlaceholder.style.display = 'block';
                 }
                 playerElement.classList.add('eyv-player-fixed');
                 const isTheater = watchFlexy?.hasAttribute('theater');
                 // Re-use isYtFull already declared above
                 if (!isTheater && !isYtFull && !document.fullscreenElement) {
+                    // Default view - set player and placeholder to initial dimensions
                     Object.assign(playerElement.style, { width: `${initialWidth}px`, height: `${initialHeight}px`, left: `${initialLeft}px`, top: `${initialTop}px`, transform: 'translateX(0%)' });
-                } else { centerStickyPlayer(playerElement); }
+                    if (playerPlaceholder?.isConnected) {
+                        playerPlaceholder.style.width = `${initialWidth}px`;
+                        playerPlaceholder.style.height = `${initialHeight}px`;
+                        playerPlaceholder.style.display = 'block';
+                    }
+                } else {
+                    // Theater/fullscreen - let centerStickyPlayer handle dimensions and placeholder
+                    centerStickyPlayer(playerElement);
+                }
                 // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
 
@@ -1132,6 +1157,7 @@
         if (playerStateObserver) playerStateObserver.disconnect();
         const ytdApp = document.querySelector('ytd-app');
         const watchFlexy = document.querySelector('ytd-watch-flexy');
+        const moviePlayer = document.querySelector('#movie_player'); // YouTube's internal player that gets ytp-fullscreen class
         const observerConfig = { attributes: true, attributeOldValue: true, attributeFilter: ['miniplayer-is-active', 'fullscreen', 'theater', 'class'] };
 
         let rafId = null;
@@ -1180,14 +1206,53 @@
                     } else if (attr === 'theater') {
                         shouldRecenter = true;
                         if (DEBUG) console.log("[EYV DBG MO] Theater mode toggled (watch-flexy).");
-                        // Sync button dimensions when theater mode toggles
-                        syncButtonDimensions();
+                        // Dispatch resize event to trigger YouTube's OSD recalculation
+                        setTimeout(() => {
+                            if (!window.eyvResizing) {
+                                window.eyvResizing = true;
+                                window.dispatchEvent(new Event('resize'));
+                                if (DEBUG) console.log('[EYV DBG] Dispatched resize event for theater mode toggle');
+                                setTimeout(() => { window.eyvResizing = false; }, 50);
+                            }
+                            // Sync button dimensions after layout settles
+                            setTimeout(() => {
+                                syncButtonDimensions();
+                            }, 100);
+                        }, 100);
                     }
                 } else if (target === playerNodeToObserve && attr === 'class') {
-                    if (playerNodeToObserve.classList.contains('ytp-fullscreen')) {
-                        shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class ADDED.");
+                    // Debug: Log all class changes on the ytd-player element
+                    if (DEBUG) console.log(`[EYV DBG MO] ytd-player class changed - Old: "${m.oldValue}" | New: "${playerNodeToObserve.className}"`);
+                } else if (target === moviePlayer && attr === 'class') {
+                    // Debug: Log all class changes on the movie_player element
+                    if (DEBUG) console.log(`[EYV DBG MO] #movie_player class changed - Old: "${m.oldValue}" | New: "${moviePlayer.className}"`);
+
+                    if (moviePlayer.classList.contains('ytp-fullscreen')) {
+                        shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class ADDED on #movie_player.");
+                        // Sync button dimensions when entering YouTube fullscreen
+                        // YouTube's buttons resize asynchronously, retry multiple times to catch final size
+                        setTimeout(() => syncButtonDimensions(), 400);
+                        setTimeout(() => syncButtonDimensions(), 800);
+                        setTimeout(() => syncButtonDimensions(), 1200);
+                        setTimeout(() => syncButtonDimensions(), 1600);
                     } else if (m.oldValue?.includes('ytp-fullscreen')) {
-                        shouldRecenter = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class REMOVED.");
+                        shouldRecenter = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class REMOVED from #movie_player - scheduling button syncs");
+                        // Dispatch resize event to force YouTube to recalculate layout
+                        setTimeout(() => {
+                            if (!window.eyvResizing) {
+                                window.eyvResizing = true;
+                                window.dispatchEvent(new Event('resize'));
+                                if (DEBUG) console.log('[EYV DBG] Dispatched resize event for fullscreen exit');
+                                setTimeout(() => { window.eyvResizing = false; }, 50);
+                            }
+                            // Sync button dimensions multiple times to catch YouTube's final size
+                            // YouTube's buttons resize asynchronously, so we retry multiple times
+                            if (DEBUG) console.log('[EYV DBG] Scheduling 4 button sync retries for fullscreen exit');
+                            setTimeout(() => syncButtonDimensions(), 400);
+                            setTimeout(() => syncButtonDimensions(), 800);
+                            setTimeout(() => syncButtonDimensions(), 1200);
+                            setTimeout(() => syncButtonDimensions(), 1600);
+                        }, 100);
                     }
                 }
                 if (shouldDeactivate && stickyButtonElement?.isConnected && stickyButtonElement.classList.contains('active')) {
@@ -1218,7 +1283,14 @@
         // Only observe if elements are connected
         if (ytdApp?.isConnected) playerStateObserver.observe(ytdApp, observerConfig);
         if (watchFlexy?.isConnected) playerStateObserver.observe(watchFlexy, observerConfig);
-        if (playerNodeToObserve?.isConnected) playerStateObserver.observe(playerNodeToObserve, observerConfig);
+        if (playerNodeToObserve?.isConnected) {
+            playerStateObserver.observe(playerNodeToObserve, observerConfig);
+            if (DEBUG) console.log(`[EYV DBG] Observing ytd-player element for class changes: ${playerNodeToObserve.id || playerNodeToObserve.tagName}`);
+        }
+        if (moviePlayer?.isConnected) {
+            playerStateObserver.observe(moviePlayer, observerConfig);
+            if (DEBUG) console.log(`[EYV DBG] Observing #movie_player element for ytp-fullscreen class changes`);
+        }
         // Register observer for cleanup
         cleanupRegistry.addObserver(playerStateObserver);
         if (DEBUG) console.log("[EYV DBG] PlayerStateObserver setup.");
@@ -1268,6 +1340,72 @@
         if (DEBUG) console.log("[EYV DBG] VideoElementObserver setup.");
     }
 
+    // --- LIVE CHAT OBSERVER ---
+    // Watches for live chat frame size changes to detect when chat is opened/closed
+    function setupLiveChatObserver() {
+        const liveChatFrame = document.querySelector('ytd-live-chat-frame');
+        if (liveChatFrame?.isConnected) {
+            let lastChatWidth = Math.round(liveChatFrame.getBoundingClientRect().width);
+            let lastChatHeight = Math.round(liveChatFrame.getBoundingClientRect().height);
+
+            const liveChatResizeObserver = new ResizeObserver((entries) => {
+                for (const entry of entries) {
+                    const newWidth = Math.round(entry.contentRect.width);
+                    const newHeight = Math.round(entry.contentRect.height);
+                    const widthChanged = Math.abs(newWidth - lastChatWidth) > 100;
+                    const heightChanged = Math.abs(newHeight - lastChatHeight) > 100;
+
+                    if (widthChanged || heightChanged) {
+                        if (DEBUG) console.log(`[EYV DBG] Live chat size changed: ${lastChatWidth}x${lastChatHeight} → ${newWidth}x${newHeight}`);
+                        lastChatWidth = newWidth;
+                        lastChatHeight = newHeight;
+
+                        // Recenter sticky player if active
+                        if (playerElementRef?.isConnected && playerElementRef.classList.contains('eyv-player-fixed')) {
+                            requestAnimationFrame(() => {
+                                centerStickyPlayer(playerElementRef);
+
+                                // Pause/resume to force YouTube to recalculate OSD layout
+                                const video = playerElementRef.querySelector('video');
+                                if (video && !video.paused) {
+                                    if (DEBUG) console.log(`[EYV DBG] Pausing/resuming for chat toggle layout fix`);
+                                    video.pause();
+                                    setTimeout(() => {
+                                        video.play();
+                                    }, 50);
+                                }
+
+                                // Dispatch window resize event to trigger YouTube's OSD recalculation
+                                setTimeout(() => {
+                                    if (!window.eyvResizing) {
+                                        window.eyvResizing = true;
+                                        window.dispatchEvent(new Event('resize'));
+                                        if (DEBUG) console.log('[EYV DBG] Dispatched resize event for OSD update');
+                                        setTimeout(() => { window.eyvResizing = false; }, 50);
+                                    }
+                                }, 75);
+
+                                // Sync button dimensions after layout changes
+                                setTimeout(() => {
+                                    syncButtonDimensions();
+                                }, 150);
+                            });
+                        }
+                    }
+                }
+            });
+
+            liveChatResizeObserver.observe(liveChatFrame);
+            cleanupRegistry.addObserver(liveChatResizeObserver);
+            if (DEBUG) console.log("[EYV DBG] LiveChatResizeObserver setup.");
+        } else {
+            // Live chat frame not loaded yet, retry after delay
+            if (DEBUG) console.log("[EYV DBG] Live chat frame not found, will retry in 1s...");
+            const retryTimeout = setTimeout(setupLiveChatObserver, 1000);
+            cleanupRegistry.addTimeout(retryTimeout);
+        }
+    }
+
     // --- HANDLE BROWSER/OS FULLSCREEN EXIT/ENTER ---
     function handleFullscreenChange() {
         try {
@@ -1277,12 +1415,21 @@
                         wasStickyBeforeOsFullscreen = true;
                         deactivateStickyModeInternal();
                     } else { wasStickyBeforeOsFullscreen = false; }
+                    // Sync button dimensions when entering fullscreen
+                    setTimeout(() => {
+                        syncButtonDimensions();
+                    }, 150);
                 } else {
-                    const videoElement = playerElementRef?.querySelector('video.html5-main-video');
-                    if (videoElement?.isConnected) {
-                        tryReactivatingStickyAfterPiPOrMiniplayer(videoElement, true);
-                    }
-                    wasStickyBeforeOsFullscreen = false;
+                    // Exiting fullscreen - add delay to ensure YouTube's layout settles
+                    setTimeout(() => {
+                        const videoElement = playerElementRef?.querySelector('video.html5-main-video');
+                        if (videoElement?.isConnected) {
+                            tryReactivatingStickyAfterPiPOrMiniplayer(videoElement, true);
+                        }
+                        wasStickyBeforeOsFullscreen = false;
+                        // Sync button dimensions when exiting fullscreen
+                        syncButtonDimensions();
+                    }, 100);
                 }
             }
         } catch (error) {
@@ -1373,7 +1520,29 @@
         let refRect;
         const isTheater = watchFlexy?.hasAttribute('theater');
         const isYtFull = document.querySelector('ytd-app')?.hasAttribute('fullscreen');
-        if (isTheater || isYtFull) { refRect = watchFlexy.getBoundingClientRect(); }
+
+        // In theater/fullscreen mode, check if chat is open and account for its width
+        if (isTheater || isYtFull) {
+            const liveChat = document.querySelector('ytd-live-chat-frame');
+            const isChatOpen = liveChat && !liveChat.hasAttribute('collapsed');
+
+            if (isChatOpen) {
+                // Chat is open - calculate available width
+                const watchRect = watchFlexy.getBoundingClientRect();
+                const chatRect = liveChat.getBoundingClientRect();
+                const availableWidth = watchRect.width - chatRect.width;
+
+                refRect = {
+                    width: availableWidth,
+                    left: watchRect.left
+                };
+                if (DEBUG) console.log(`[EYV DBG] Theater/fullscreen with chat: ${availableWidth}px (watch: ${watchRect.width}px - chat: ${chatRect.width}px)`);
+            } else {
+                // Chat is closed - use full width
+                refRect = watchFlexy.getBoundingClientRect();
+                if (DEBUG) console.log('[EYV DBG] Theater/fullscreen without chat: using full watchFlexy width');
+            }
+        }
         else if (primaryCol) { refRect = primaryCol.getBoundingClientRect(); }
         else if (watchFlexy) { refRect = watchFlexy.getBoundingClientRect(); }
         else {
@@ -1385,9 +1554,45 @@
         let newW = refRect.width, newL = refRect.left;
         if (isNaN(newW) || newW <= 0) newW = parseFloat(fixedPlayer.style.width) || (window.innerWidth > 700 ? 640 : window.innerWidth * 0.9);
 
+        // Apply max-width constraint in default view to prevent player from getting too large
+        // Read YouTube's actual max-width from primaryCol element
+        if (!isTheater && !isYtFull && primaryCol) {
+            const primaryColStyles = getComputedStyle(primaryCol);
+            const maxWidthStr = primaryColStyles.maxWidth;
+
+            if (maxWidthStr && maxWidthStr !== 'none') {
+                const maxWidth = parseFloat(maxWidthStr);
+                if (maxWidth > 0 && newW > maxWidth) {
+                    if (DEBUG) console.log(`[EYV DBG] Limiting player width from ${newW}px to YouTube's max: ${maxWidth}px`);
+                    newW = maxWidth;
+                    // Center the player horizontally when it hits max width
+                    newL = (window.innerWidth - newW) / 2;
+                }
+            }
+        }
+
         // Calculate height with validation to prevent NaN/Infinity
         const validAspectRatio = (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0) ? originalPlayerAspectRatio : 9/16;
-        const newH = newW * validAspectRatio;
+        let newH = newW * validAspectRatio;
+
+        // Constrain height to viewport to prevent OSD controls from being pushed off screen
+        // Leave some margin (100px) to ensure controls are fully visible
+        const availableHeight = window.innerHeight - mastheadOffset - 100;
+        if (newH > availableHeight) {
+            if (DEBUG) console.log(`[EYV DBG] Limiting player height from ${newH}px to ${availableHeight}px to keep controls visible`);
+            newH = availableHeight;
+            // Recalculate width based on constrained height to maintain aspect ratio
+            newW = newH / validAspectRatio;
+            // Center horizontally when width is constrained by height
+            // In theater/fullscreen, center within the available space
+            if (isTheater || isYtFull) {
+                const availableWidth = refRect.width;
+                newL = refRect.left + (availableWidth - newW) / 2;
+                if (DEBUG) console.log(`[EYV DBG] Centering player in theater/fullscreen: left=${newL}px (container: ${availableWidth}px, player: ${newW}px)`);
+            } else {
+                newL = (window.innerWidth - newW) / 2;
+            }
+        }
 
         // Final validation before applying styles
         if (!isFinite(newW) || !isFinite(newH) || newW <= 0 || newH <= 0) {
@@ -1396,6 +1601,20 @@
         }
 
         Object.assign(fixedPlayer.style, { width: `${newW}px`, height: `${newH}px`, left: `${newL}px`, top: `${mastheadOffset}px`, transform: 'translateX(0%)' });
+
+        // Hide placeholder in theater/fullscreen mode to prevent layout gaps
+        const placeholder = document.getElementById('eyv-player-placeholder');
+        if (placeholder && placeholder.isConnected) {
+            if (isTheater || isYtFull) {
+                placeholder.style.display = 'none';
+                if (DEBUG) console.log(`[EYV DBG] Hiding placeholder in theater/fullscreen mode`);
+            } else {
+                placeholder.style.display = 'block';
+                placeholder.style.width = `${newW}px`;
+                placeholder.style.height = `${newH}px`;
+                if (DEBUG) console.log(`[EYV DBG] Updated placeholder to ${newW}px x ${newH}px`);
+            }
+        }
     }
 
     // --- CSS INJECTION ---
@@ -1442,8 +1661,14 @@
                 left: 0 !important;
             }
 
-            #eyv-player-placeholder { 
-                display: none;
+            #eyv-player-placeholder {
+                pointer-events: none !important;
+            }
+
+            /* In theater mode with sticky active, shrink player-container to match sticky player height */
+            ytd-watch-flexy[theater] #player-container:has(.eyv-player-fixed) {
+                height: auto !important;
+                min-height: 0 !important;
             }
 
             .eyv-player-button, .eyv-pip-button {

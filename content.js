@@ -213,6 +213,7 @@
     let pipEnabled = true; // Feature enable/disable
     let wasStickyBeforeEnd = false; // Track if sticky was active when video ended
     let wasStickyDuringCurrentVideo = false; // Track if sticky was EVER active during current video playback
+    let isAutoPauseResumeActive = false; // Flag to prevent interference with user pause/play
 
     // WeakSets to track elements with attached listeners (survives element replacement)
     const videoElementsWithListeners = new WeakSet();
@@ -686,11 +687,14 @@
                                 return;
                             }
 
-                            if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active')) {
+                            // Only deactivate on pause if it's a real user pause, not our automatic pause/resume
+                            if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active') && !isAutoPauseResumeActive) {
                                 if (DEBUG) console.log("[EYV DBG] Paused. Deactivating sticky mode as per settings.");
                                 // Set flag AFTER deactivating to prevent it from being reset
                                 deactivateStickyModeInternal(true); // Pass true to preserve pause flag
                                 wasStickyBeforePause = true;
+                            } else if (isAutoPauseResumeActive) {
+                                if (DEBUG) console.log("[EYV DBG] Paused during auto pause/resume - skipping deactivation");
                             }
                         } catch (error) {
                             console.error('[EYV] Video pause handler error:', error);
@@ -709,6 +713,17 @@
                                     if (stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
                                         if (DEBUG) console.log("[EYV DBG] Resuming play. Re-activating sticky mode.");
                                         stickyButtonElement.click();
+
+                                        // After reactivating sticky, trigger YouTube's OSD recalculation
+                                        // This ensures OSD controls reposition correctly if chat was opened/closed while paused
+                                        setTimeout(() => {
+                                            window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                            if (DEBUG) console.log('[EYV DBG] Dispatched resize after sticky reactivation');
+                                        }, 150);
+                                        setTimeout(() => {
+                                            window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                            syncButtonDimensions();
+                                        }, 300);
                                     }
                                 }
                             }
@@ -966,8 +981,38 @@
         if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
         if (DEBUG) console.log('[EYV DBG] Deactivating sticky mode.'); else console.log('[EYV] Deactivating sticky mode.');
         if (playerElementRef) {
-            playerElementRef.classList.remove('eyv-player-fixed');
-            Object.assign(playerElementRef.style, { width: '', height: '', top: '', left: '', transform: '' });
+            // In theater mode with chat open, calculate and preserve dimensions to prevent player from expanding
+            const watchFlexy = document.querySelector('ytd-watch-flexy');
+            const isTheater = watchFlexy?.hasAttribute('theater');
+            const liveChat = document.querySelector('ytd-live-chat-frame');
+            const isChatOpen = liveChat && liveChat.getBoundingClientRect().height > 200;
+
+            if (isTheater && isChatOpen && preservePauseFlag) {
+                // Calculate the width that accounts for chat BEFORE removing sticky class
+                const watchRect = watchFlexy.getBoundingClientRect();
+                const chatRect = liveChat.getBoundingClientRect();
+                const availableWidth = watchRect.width - chatRect.width;
+
+                // Calculate height maintaining aspect ratio
+                const validAspectRatio = (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0) ? originalPlayerAspectRatio : 9/16;
+                const calculatedHeight = availableWidth * validAspectRatio;
+
+                if (DEBUG) console.log(`[EYV DBG] Preserving dimensions in theater with chat: ${availableWidth}px x ${calculatedHeight}px (chat width: ${chatRect.width}px)`);
+
+                // Remove sticky class first, then set dimensions
+                playerElementRef.classList.remove('eyv-player-fixed');
+                Object.assign(playerElementRef.style, {
+                    width: `${availableWidth}px`,
+                    height: `${calculatedHeight}px`,
+                    top: '',
+                    left: '',
+                    transform: ''
+                });
+            } else {
+                // Normal deactivation - clear all styles
+                playerElementRef.classList.remove('eyv-player-fixed');
+                Object.assign(playerElementRef.style, { width: '', height: '', top: '', left: '', transform: '' });
+            }
         }
         if (playerPlaceholder && playerPlaceholder.isConnected) playerPlaceholder.style.display = 'none';
 
@@ -1124,12 +1169,16 @@
 
                 // Setup ResizeObserver for smooth real-time resizing
                 if (!stickyResizeObserver) {
+                    let resizeTimeout = null;
                     stickyResizeObserver = new ResizeObserver(() => {
                         if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                            // Use requestAnimationFrame to ensure smooth resize
-                            requestAnimationFrame(() => {
-                                centerStickyPlayer(playerElementRef);
-                            });
+                            // Debounce resize events to prevent constant recalculation that blocks clicks
+                            if (resizeTimeout) clearTimeout(resizeTimeout);
+                            resizeTimeout = setTimeout(() => {
+                                requestAnimationFrame(() => {
+                                    centerStickyPlayer(playerElementRef);
+                                });
+                            }, 100); // Wait 100ms after last resize before recalculating
                         }
                     });
 
@@ -1157,8 +1206,7 @@
         if (playerStateObserver) playerStateObserver.disconnect();
         const ytdApp = document.querySelector('ytd-app');
         const watchFlexy = document.querySelector('ytd-watch-flexy');
-        const moviePlayer = document.querySelector('#movie_player'); // YouTube's internal player that gets ytp-fullscreen class
-        const observerConfig = { attributes: true, attributeOldValue: true, attributeFilter: ['miniplayer-is-active', 'fullscreen', 'theater', 'class'] };
+        const observerConfig = { attributes: true, attributeOldValue: true, attributeFilter: ['miniplayer-is-active', 'fullscreen', 'theater'] };
 
         let rafId = null;
         let pendingMutations = [];
@@ -1184,7 +1232,10 @@
                 for (const m of mutationsList) {
                 if (m.type !== 'attributes') continue;
                 const target = m.target; const attr = m.attributeName;
-                if (DEBUG) console.log(`[EYV DBG MO] Attr '${attr}' on ${target.tagName}${target.id?'#'+target.id:''}. OldValue: ${m.oldValue}`);
+                // Only log important attribute changes to reduce console spam
+                // if (DEBUG && (attr === 'fullscreen' || attr === 'theater' || attr === 'miniplayer-is-active')) {
+                //     console.log(`[EYV DBG MO] Attr '${attr}' on ${target.tagName}${target.id?'#'+target.id:''}. OldValue: ${m.oldValue}`);
+                // }
                 if (target === ytdApp) {
                     if (attr === 'miniplayer-is-active') {
                         if (ytdApp.hasAttribute(attr)) {
@@ -1220,40 +1271,6 @@
                             }, 100);
                         }, 100);
                     }
-                } else if (target === playerNodeToObserve && attr === 'class') {
-                    // Debug: Log all class changes on the ytd-player element
-                    if (DEBUG) console.log(`[EYV DBG MO] ytd-player class changed - Old: "${m.oldValue}" | New: "${playerNodeToObserve.className}"`);
-                } else if (target === moviePlayer && attr === 'class') {
-                    // Debug: Log all class changes on the movie_player element
-                    if (DEBUG) console.log(`[EYV DBG MO] #movie_player class changed - Old: "${m.oldValue}" | New: "${moviePlayer.className}"`);
-
-                    if (moviePlayer.classList.contains('ytp-fullscreen')) {
-                        shouldDeactivate = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class ADDED on #movie_player.");
-                        // Sync button dimensions when entering YouTube fullscreen
-                        // YouTube's buttons resize asynchronously, retry multiple times to catch final size
-                        setTimeout(() => syncButtonDimensions(), 400);
-                        setTimeout(() => syncButtonDimensions(), 800);
-                        setTimeout(() => syncButtonDimensions(), 1200);
-                        setTimeout(() => syncButtonDimensions(), 1600);
-                    } else if (m.oldValue?.includes('ytp-fullscreen')) {
-                        shouldRecenter = true; if (DEBUG) console.log("[EYV DBG MO] ytp-fullscreen class REMOVED from #movie_player - scheduling button syncs");
-                        // Dispatch resize event to force YouTube to recalculate layout
-                        setTimeout(() => {
-                            if (!window.eyvResizing) {
-                                window.eyvResizing = true;
-                                window.dispatchEvent(new Event('resize'));
-                                if (DEBUG) console.log('[EYV DBG] Dispatched resize event for fullscreen exit');
-                                setTimeout(() => { window.eyvResizing = false; }, 50);
-                            }
-                            // Sync button dimensions multiple times to catch YouTube's final size
-                            // YouTube's buttons resize asynchronously, so we retry multiple times
-                            if (DEBUG) console.log('[EYV DBG] Scheduling 4 button sync retries for fullscreen exit');
-                            setTimeout(() => syncButtonDimensions(), 400);
-                            setTimeout(() => syncButtonDimensions(), 800);
-                            setTimeout(() => syncButtonDimensions(), 1200);
-                            setTimeout(() => syncButtonDimensions(), 1600);
-                        }, 100);
-                    }
                 }
                 if (shouldDeactivate && stickyButtonElement?.isConnected && stickyButtonElement.classList.contains('active')) {
                     deactivateStickyModeInternal();
@@ -1283,14 +1300,6 @@
         // Only observe if elements are connected
         if (ytdApp?.isConnected) playerStateObserver.observe(ytdApp, observerConfig);
         if (watchFlexy?.isConnected) playerStateObserver.observe(watchFlexy, observerConfig);
-        if (playerNodeToObserve?.isConnected) {
-            playerStateObserver.observe(playerNodeToObserve, observerConfig);
-            if (DEBUG) console.log(`[EYV DBG] Observing ytd-player element for class changes: ${playerNodeToObserve.id || playerNodeToObserve.tagName}`);
-        }
-        if (moviePlayer?.isConnected) {
-            playerStateObserver.observe(moviePlayer, observerConfig);
-            if (DEBUG) console.log(`[EYV DBG] Observing #movie_player element for ytp-fullscreen class changes`);
-        }
         // Register observer for cleanup
         cleanupRegistry.addObserver(playerStateObserver);
         if (DEBUG) console.log("[EYV DBG] PlayerStateObserver setup.");
@@ -1347,48 +1356,98 @@
         if (liveChatFrame?.isConnected) {
             let lastChatWidth = Math.round(liveChatFrame.getBoundingClientRect().width);
             let lastChatHeight = Math.round(liveChatFrame.getBoundingClientRect().height);
+            // Use height as the indicator - chat is "open" when height is substantial (> 200px)
+            let wasChatOpen = lastChatHeight > 200;
+
+            if (DEBUG) console.log(`[EYV DBG] LiveChatObserver initialized - chat ${wasChatOpen ? 'open' : 'closed'} (${lastChatWidth}x${lastChatHeight})`);
 
             const liveChatResizeObserver = new ResizeObserver((entries) => {
                 for (const entry of entries) {
                     const newWidth = Math.round(entry.contentRect.width);
                     const newHeight = Math.round(entry.contentRect.height);
-                    const widthChanged = Math.abs(newWidth - lastChatWidth) > 100;
-                    const heightChanged = Math.abs(newHeight - lastChatHeight) > 100;
+                    // Use height as the indicator - chat is "open" when height is substantial (> 200px)
+                    const isChatOpenNow = newHeight > 200;
+                    const chatToggledState = wasChatOpen !== isChatOpenNow; // Only trigger on open/close, not resize
 
-                    if (widthChanged || heightChanged) {
-                        if (DEBUG) console.log(`[EYV DBG] Live chat size changed: ${lastChatWidth}x${lastChatHeight} → ${newWidth}x${newHeight}`);
+                    const widthChanged = Math.abs(newWidth - lastChatWidth) > 10;
+                    const heightChanged = Math.abs(newHeight - lastChatHeight) > 200;
+
+                    if (DEBUG && (widthChanged || heightChanged)) {
+                        console.log(`[EYV DBG] Chat resize detected: ${lastChatWidth}x${lastChatHeight} → ${newWidth}x${newHeight}, toggled=${chatToggledState}, wasChatOpen=${wasChatOpen}, isChatOpenNow=${isChatOpenNow}`);
+                    }
+
+                    if ((widthChanged || heightChanged) && chatToggledState) {
+                        if (DEBUG) console.log(`[EYV DBG] Live chat toggled: ${wasChatOpen ? 'open' : 'closed'} → ${isChatOpenNow ? 'open' : 'closed'} (${lastChatWidth}x${lastChatHeight} → ${newWidth}x${newHeight})`);
                         lastChatWidth = newWidth;
                         lastChatHeight = newHeight;
+                        wasChatOpen = isChatOpenNow;
 
-                        // Recenter sticky player if active
-                        if (playerElementRef?.isConnected && playerElementRef.classList.contains('eyv-player-fixed')) {
+                        // Handle chat toggle for both sticky active and inactive states
+                        if (playerElementRef?.isConnected) {
+                            const isStickyActive = playerElementRef.classList.contains('eyv-player-fixed');
+
                             requestAnimationFrame(() => {
-                                centerStickyPlayer(playerElementRef);
+                                // Recenter sticky player if active
+                                if (isStickyActive) {
+                                    centerStickyPlayer(playerElementRef);
+                                    if (DEBUG) console.log('[EYV DBG] Recentered sticky player for chat toggle');
+                                } else {
+                                    // Player is paused/not in sticky - clear preserved dimensions when chat closes
+                                    if (!isChatOpenNow) {
+                                        if (DEBUG) console.log('[EYV DBG] Chat closed while paused - clearing preserved dimensions');
+                                        Object.assign(playerElementRef.style, { width: '', height: '' });
+                                    }
+                                }
 
-                                // Pause/resume to force YouTube to recalculate OSD layout
+                                // Imperceptible pause/resume to force YouTube's OSD recalculation
                                 const video = playerElementRef.querySelector('video');
                                 if (video && !video.paused) {
-                                    if (DEBUG) console.log(`[EYV DBG] Pausing/resuming for chat toggle layout fix`);
+                                    if (DEBUG) console.log('[EYV DBG] Auto pause/resume for OSD fix');
+                                    // Set flag to prevent pause handler from deactivating sticky
+                                    isAutoPauseResumeActive = true;
                                     video.pause();
                                     setTimeout(() => {
                                         video.play();
-                                    }, 50);
+                                        // Clear flag after play
+                                        setTimeout(() => {
+                                            isAutoPauseResumeActive = false;
+                                            if (DEBUG) console.log('[EYV DBG] Auto pause/resume complete');
+                                        }, 50);
+                                    }, 10); // Very brief 10ms pause - imperceptible to user
                                 }
 
-                                // Dispatch window resize event to trigger YouTube's OSD recalculation
-                                setTimeout(() => {
-                                    if (!window.eyvResizing) {
-                                        window.eyvResizing = true;
-                                        window.dispatchEvent(new Event('resize'));
-                                        if (DEBUG) console.log('[EYV DBG] Dispatched resize event for OSD update');
-                                        setTimeout(() => { window.eyvResizing = false; }, 50);
-                                    }
-                                }, 75);
+                                // Trigger YouTube's OSD recalculation by dispatching resize events
+                                // This is what fixes the OSD button positioning when chat opens/closes
+                                if (DEBUG) console.log('[EYV DBG] Dispatching resize events to fix OSD positioning');
 
-                                // Sync button dimensions after layout changes
+                                // Dispatch multiple resize events with delays to ensure YouTube catches it
+                                window.dispatchEvent(new Event('resize', { bubbles: true }));
+
                                 setTimeout(() => {
-                                    syncButtonDimensions();
+                                    window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                    if (DEBUG) console.log('[EYV DBG] Resize event 1');
+                                }, 50);
+
+                                setTimeout(() => {
+                                    window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                    if (DEBUG) console.log('[EYV DBG] Resize event 2');
                                 }, 150);
+
+                                setTimeout(() => {
+                                    window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                    if (DEBUG) console.log('[EYV DBG] Resize event 3');
+                                }, 300);
+
+                                setTimeout(() => {
+                                    window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                    if (DEBUG) console.log('[EYV DBG] Resize event 4');
+                                }, 500);
+
+                                // Sync button dimensions to match YouTube's final size
+                                setTimeout(() => syncButtonDimensions(), 100);
+                                setTimeout(() => syncButtonDimensions(), 300);
+                                setTimeout(() => syncButtonDimensions(), 500);
+                                setTimeout(() => syncButtonDimensions(), 700);
                             });
                         }
                     }
@@ -1524,7 +1583,7 @@
         // In theater/fullscreen mode, check if chat is open and account for its width
         if (isTheater || isYtFull) {
             const liveChat = document.querySelector('ytd-live-chat-frame');
-            const isChatOpen = liveChat && !liveChat.hasAttribute('collapsed');
+            const isChatOpen = liveChat && liveChat.getBoundingClientRect().height > 200;
 
             if (isChatOpen) {
                 // Chat is open - calculate available width

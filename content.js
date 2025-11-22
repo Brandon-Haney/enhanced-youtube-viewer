@@ -1635,7 +1635,7 @@
                 background-color: var(--yt-spec-base-background, #0f0f0f);
                 box-sizing: border-box !important;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                pointer-events: auto !important;
+                pointer-events: none !important;
             }
 
             .eyv-player-fixed > div#movie_player,
@@ -1661,6 +1661,13 @@
                 object-fit: contain !important;
                 top: 0 !important;
                 left: 0 !important;
+                pointer-events: auto !important;
+            }
+
+            .eyv-player-fixed .ytp-chrome-bottom,
+            .eyv-player-fixed .ytp-gradient-bottom,
+            .eyv-player-fixed .ytp-chrome-top,
+            .eyv-player-fixed .ytp-gradient-top {
                 pointer-events: auto !important;
             }
 

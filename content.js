@@ -577,9 +577,8 @@
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
-                        // DIAGNOSTIC #6: Create buttons but DON'T add to DOM yet
-                        // SponsorBlock buttons appear with delay - maybe they're not in DOM until hover?
-                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Creating buttons (will NOT be inserted into DOM yet)');
+                        // FORCE TOUCH FIX: Create buttons but don't add to DOM until hover
+                        // This prevents interference with macOS Force Touch pause/play functionality
 
                         stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                         if (!stickyButtonElement && stickyPlayerEnabled) {
@@ -590,7 +589,6 @@
                             stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
                             // Set display (will be shown when inserted on hover)
                             stickyButtonElement.style.display = 'inline-flex';
-                            console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Created sticky button (NOT in DOM yet)');
                         } else if (stickyButtonElement && !stickyPlayerEnabled) {
                             stickyButtonElement.remove();
                             stickyButtonElement = null;
@@ -605,7 +603,6 @@
                             pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
                             // Set display (will be shown when inserted on hover)
                             pipBtnInstance.style.display = 'inline-flex';
-                            console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Created PiP button (NOT in DOM yet)');
                         } else if (pipBtnInstance && !pipEnabled) {
                             pipBtnInstance.remove();
                             pipBtnInstance = null;
@@ -793,57 +790,50 @@
                     pipButtonsWithListeners.add(pipBtnInstance);
                 }
 
-                // DIAGNOSTIC #6: DON'T insert buttons into DOM yet - add them dynamically on hover
-                // Theory: Buttons must not exist in DOM at all for Force Touch to work
-                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Buttons created but NOT inserted into DOM');
-                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Will add/remove from DOM on hover/leave events');
+                // FORCE TOUCH FIX: Dynamically add/remove buttons on hover
+                // Buttons are only added to DOM when hovering over controls, preventing
+                // interference with macOS Force Touch pause/play functionality
 
                 // Store buttons for later insertion
                 const buttonsToInsert = { sticky: stickyButtonElement, pip: pipBtnInstance };
 
                 // Add hover listeners to dynamically insert/remove buttons
                 const insertButtons = () => {
-                    const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+                    // Insert into LEFT controls instead of right (user preference)
+                    const playerLeftControls = player.querySelector('.ytp-left-controls');
+                    const targetContainer = playerLeftControls || playerRightControls;
 
-                    // Insert PiP button first
-                    if (buttonsToInsert.pip && !playerRightControls.contains(buttonsToInsert.pip)) {
-                        if (settingsButton && settingsButton.parentNode === playerRightControls) {
-                            playerRightControls.insertBefore(buttonsToInsert.pip, settingsButton);
-                        } else {
-                            playerRightControls.appendChild(buttonsToInsert.pip);
-                        }
-                        buttonsToInsert.pip.style.display = 'inline-flex';
+                    // Insert sticky button first (leftmost)
+                    if (buttonsToInsert.sticky && !targetContainer.contains(buttonsToInsert.sticky)) {
+                        targetContainer.appendChild(buttonsToInsert.sticky);
+                        buttonsToInsert.sticky.style.display = 'inline-flex';
                     }
 
-                    // Insert sticky button (using pip as reference if it's in DOM)
-                    if (buttonsToInsert.sticky && !playerRightControls.contains(buttonsToInsert.sticky)) {
-                        // Use pip button as reference only if it's already in the DOM
-                        const pipInDOM = buttonsToInsert.pip && playerRightControls.contains(buttonsToInsert.pip);
-                        const referenceNode = pipInDOM ? buttonsToInsert.pip : settingsButton;
-
-                        if (referenceNode && referenceNode.parentNode === playerRightControls) {
-                            playerRightControls.insertBefore(buttonsToInsert.sticky, referenceNode);
-                        } else {
-                            playerRightControls.appendChild(buttonsToInsert.sticky);
-                        }
-                        buttonsToInsert.sticky.style.display = 'inline-flex';
+                    // Insert PiP button after sticky
+                    if (buttonsToInsert.pip && !targetContainer.contains(buttonsToInsert.pip)) {
+                        targetContainer.appendChild(buttonsToInsert.pip);
+                        buttonsToInsert.pip.style.display = 'inline-flex';
                     }
                 };
 
                 const removeButtons = () => {
-                    if (buttonsToInsert.pip && playerRightControls.contains(buttonsToInsert.pip)) {
+                    // Remove from wherever they are (left or right controls)
+                    if (buttonsToInsert.pip && buttonsToInsert.pip.parentNode) {
                         buttonsToInsert.pip.remove();
                     }
-                    if (buttonsToInsert.sticky && playerRightControls.contains(buttonsToInsert.sticky)) {
+                    if (buttonsToInsert.sticky && buttonsToInsert.sticky.parentNode) {
                         buttonsToInsert.sticky.remove();
                     }
                 };
 
-                // Listen for mouse enter/leave on the control bar
+                // Listen for mouse enter/leave on BOTH control bars (left and right)
+                const playerLeftControls = player.querySelector('.ytp-left-controls');
+                if (playerLeftControls) {
+                    cleanupRegistry.addListener(playerLeftControls, 'mouseenter', insertButtons);
+                    cleanupRegistry.addListener(playerLeftControls, 'mouseleave', removeButtons);
+                }
                 cleanupRegistry.addListener(playerRightControls, 'mouseenter', insertButtons);
                 cleanupRegistry.addListener(playerRightControls, 'mouseleave', removeButtons);
-
-                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Buttons will be added to DOM ONLY when hovering controls');
 
                 // Sync our button dimensions with YouTube's native buttons
                 syncButtonDimensions();
@@ -1714,15 +1704,7 @@
                 min-height: 0 !important;
             }
 
-            /* FORCE TOUCH FIX: Show buttons only on hover (like SponsorBlock) */
-            /* Buttons are display:none by default to not interfere with Force Touch */
-            .ytp-chrome-bottom:hover .eyv-player-button,
-            .ytp-chrome-bottom:hover .eyv-pip-button {
-                display: inline-flex !important;
-            }
-
             .eyv-player-button, .eyv-pip-button {
-                /* display set via inline style (none by default, inline-flex on hover via parent rule) */
                 align-items: center !important;
                 justify-content: center !important;
                 padding: 0 !important;

@@ -577,6 +577,11 @@
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
+                        // --- FORCE TOUCH DIAGNOSTIC #2 ---
+                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #2: Skipping button creation to test if buttons interfere with Force Touch');
+
+                        // TEMPORARY: Comment out button creation
+                        /*
                         // Only create sticky player button if enabled
                         stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                         if (!stickyButtonElement && stickyPlayerEnabled) {
@@ -602,6 +607,12 @@
                             pipBtnInstance.remove();
                             pipBtnInstance = null;
                         }
+                        */
+
+                        // Set to null for testing
+                        stickyButtonElement = null;
+                        let pipBtnInstance = null;
+                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #2: Buttons NOT created. Force Touch should work if buttons were the issue.');
 
                         // Continue with the rest of initialization
                         initializeControlsContinued(pipBtnInstance, defaultStickyEnabled);
@@ -796,6 +807,10 @@
                     });
                     pipButtonsWithListeners.add(pipBtnInstance);
                 }
+
+                // --- FORCE TOUCH DIAGNOSTIC #2 ---
+                // Skip button insertion since we're not creating buttons
+                /*
                 // Insert buttons into player controls with fallback logic for YouTube DOM changes
                 const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
 
@@ -826,6 +841,8 @@
 
                 // Sync our button dimensions with YouTube's native buttons
                 syncButtonDimensions();
+                */
+                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #2: Skipped button insertion and sync');
 
                 if (playerElementRef && !playerStateObserver) setupPlayerStateObserver(playerElementRef, videoElement);
                 if (playerElementRef && !videoElementObserver) setupVideoElementObserver(playerElementRef);

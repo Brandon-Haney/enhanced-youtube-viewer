@@ -789,32 +789,42 @@
                     pipButtonsWithListeners.add(pipBtnInstance);
                 }
 
-                // Insert buttons into player controls with fallback logic for YouTube DOM changes
-                const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+                // FORCE TOUCH FIX: Wrap our buttons in a container to prevent YouTube from
+                // detecting them as direct modifications to .ytp-right-controls
+                // This should prevent YouTube from disabling Force Touch functionality
+                let buttonContainer = playerRightControls.querySelector('.eyv-button-container');
+                if (!buttonContainer && (stickyButtonElement || pipBtnInstance)) {
+                    buttonContainer = document.createElement('div');
+                    buttonContainer.className = 'eyv-button-container';
+                    // Style container to blend with YouTube's controls
+                    buttonContainer.style.display = 'inline-flex';
+                    buttonContainer.style.alignItems = 'center';
+                    buttonContainer.style.gap = '0';
+                    // Allow Force Touch events to pass through container
+                    buttonContainer.style.pointerEvents = 'none';
+                }
 
-                // Check if settings button is a direct child of playerRightControls
-                const isSettingsButtonDirectChild = settingsButton && settingsButton.parentNode === playerRightControls;
+                // Add buttons to container instead of directly to playerRightControls
+                if (stickyButtonElement && buttonContainer && !buttonContainer.contains(stickyButtonElement)) {
+                    // Set pointer-events: auto on button so it's clickable
+                    stickyButtonElement.style.pointerEvents = 'auto';
+                    buttonContainer.appendChild(stickyButtonElement);
+                }
+                if (pipBtnInstance && buttonContainer && !buttonContainer.contains(pipBtnInstance)) {
+                    // Set pointer-events: auto on button so it's clickable
+                    pipBtnInstance.style.pointerEvents = 'auto';
+                    buttonContainer.appendChild(pipBtnInstance);
+                }
 
-                if (isSettingsButtonDirectChild) {
-                    // Settings button is a direct child, safe to use insertBefore
-                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) {
-                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
-                    } else if (pipBtnInstance && pipBtnInstance.nextSibling !== settingsButton) {
-                        // PiP button exists but not in correct position
-                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
+                // Insert container into player controls
+                if (buttonContainer && !playerRightControls.contains(buttonContainer)) {
+                    const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+                    if (settingsButton && settingsButton.parentNode === playerRightControls) {
+                        playerRightControls.insertBefore(buttonContainer, settingsButton);
+                    } else {
+                        playerRightControls.prepend(buttonContainer);
                     }
-
-                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) {
-                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance || settingsButton);
-                    } else if (stickyButtonElement && pipBtnInstance && stickyButtonElement.nextSibling !== pipBtnInstance) {
-                        // Sticky button exists but not in correct position
-                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
-                    }
-                } else {
-                    // Fallback: prepend buttons if settings button structure changed
-                    if (DEBUG) console.log('[EYV DBG] Settings button not direct child or not found, using prepend fallback');
-                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
-                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
+                    console.log('[EYV] Buttons inserted in container - testing Force Touch compatibility');
                 }
 
                 // Sync our button dimensions with YouTube's native buttons

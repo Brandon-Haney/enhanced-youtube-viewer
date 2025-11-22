@@ -799,25 +799,37 @@
 
                 // Add hover listeners to dynamically insert/remove buttons
                 const insertButtons = () => {
-                    // Insert into LEFT controls instead of right (user preference)
-                    const playerLeftControls = player.querySelector('.ytp-left-controls');
-                    const targetContainer = playerLeftControls || playerRightControls;
+                    // Insert at the beginning of RIGHT controls (leftmost position within right controls)
+                    const firstButton = playerRightControls.firstChild;
 
-                    // Insert sticky button first (leftmost)
-                    if (buttonsToInsert.sticky && !targetContainer.contains(buttonsToInsert.sticky)) {
-                        targetContainer.appendChild(buttonsToInsert.sticky);
+                    // Insert sticky button first (leftmost in right controls)
+                    if (buttonsToInsert.sticky && !playerRightControls.contains(buttonsToInsert.sticky)) {
+                        if (firstButton) {
+                            playerRightControls.insertBefore(buttonsToInsert.sticky, firstButton);
+                        } else {
+                            playerRightControls.appendChild(buttonsToInsert.sticky);
+                        }
                         buttonsToInsert.sticky.style.display = 'inline-flex';
                     }
 
-                    // Insert PiP button after sticky
-                    if (buttonsToInsert.pip && !targetContainer.contains(buttonsToInsert.pip)) {
-                        targetContainer.appendChild(buttonsToInsert.pip);
+                    // Insert PiP button after sticky (second from left in right controls)
+                    if (buttonsToInsert.pip && !playerRightControls.contains(buttonsToInsert.pip)) {
+                        // Insert after sticky button if it exists, otherwise at the beginning
+                        const referenceNode = buttonsToInsert.sticky && playerRightControls.contains(buttonsToInsert.sticky)
+                            ? buttonsToInsert.sticky.nextSibling
+                            : firstButton;
+
+                        if (referenceNode) {
+                            playerRightControls.insertBefore(buttonsToInsert.pip, referenceNode);
+                        } else {
+                            playerRightControls.appendChild(buttonsToInsert.pip);
+                        }
                         buttonsToInsert.pip.style.display = 'inline-flex';
                     }
                 };
 
                 const removeButtons = () => {
-                    // Remove from wherever they are (left or right controls)
+                    // Remove buttons from DOM
                     if (buttonsToInsert.pip && buttonsToInsert.pip.parentNode) {
                         buttonsToInsert.pip.remove();
                     }
@@ -826,12 +838,7 @@
                     }
                 };
 
-                // Listen for mouse enter/leave on BOTH control bars (left and right)
-                const playerLeftControls = player.querySelector('.ytp-left-controls');
-                if (playerLeftControls) {
-                    cleanupRegistry.addListener(playerLeftControls, 'mouseenter', insertButtons);
-                    cleanupRegistry.addListener(playerLeftControls, 'mouseleave', removeButtons);
-                }
+                // Listen for mouse enter/leave on right control bar
                 cleanupRegistry.addListener(playerRightControls, 'mouseenter', insertButtons);
                 cleanupRegistry.addListener(playerRightControls, 'mouseleave', removeButtons);
 

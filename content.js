@@ -577,9 +577,9 @@
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
-                        // DIAGNOSTIC #5: HIDE buttons by default, show on hover (like SponsorBlock!)
-                        // KEY INSIGHT: SponsorBlock buttons only appear on hover, so they don't interfere with Force Touch!
-                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #5: Creating buttons HIDDEN by default, visible on hover');
+                        // DIAGNOSTIC #6: Create buttons but DON'T add to DOM yet
+                        // SponsorBlock buttons appear with delay - maybe they're not in DOM until hover?
+                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Creating buttons (will NOT be inserted into DOM yet)');
 
                         stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                         if (!stickyButtonElement && stickyPlayerEnabled) {
@@ -588,9 +588,9 @@
                             stickyButtonElement.innerHTML = pinSVGIcon;
                             stickyButtonElement.title = 'Toggle Sticky Player';
                             stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
-                            // HIDE by default
-                            stickyButtonElement.style.display = 'none';
-                            console.log('[EYV FORCE TOUCH] DIAGNOSTIC #5: Created sticky button (hidden by default)');
+                            // Set display (will be shown when inserted on hover)
+                            stickyButtonElement.style.display = 'inline-flex';
+                            console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Created sticky button (NOT in DOM yet)');
                         } else if (stickyButtonElement && !stickyPlayerEnabled) {
                             stickyButtonElement.remove();
                             stickyButtonElement = null;
@@ -603,9 +603,9 @@
                             pipBtnInstance.innerHTML = pipSVGDefault;
                             pipBtnInstance.title = 'Toggle Picture-in-Picture';
                             pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
-                            // HIDE by default
-                            pipBtnInstance.style.display = 'none';
-                            console.log('[EYV FORCE TOUCH] DIAGNOSTIC #5: Created PiP button (hidden by default)');
+                            // Set display (will be shown when inserted on hover)
+                            pipBtnInstance.style.display = 'inline-flex';
+                            console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Created PiP button (NOT in DOM yet)');
                         } else if (pipBtnInstance && !pipEnabled) {
                             pipBtnInstance.remove();
                             pipBtnInstance = null;
@@ -793,26 +793,51 @@
                     pipButtonsWithListeners.add(pipBtnInstance);
                 }
 
-                // DIAGNOSTIC #5: Insert buttons - they're hidden by default, visible on hover
-                const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
-                const isSettingsButtonDirectChild = settingsButton && settingsButton.parentNode === playerRightControls;
+                // DIAGNOSTIC #6: DON'T insert buttons into DOM yet - add them dynamically on hover
+                // Theory: Buttons must not exist in DOM at all for Force Touch to work
+                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Buttons created but NOT inserted into DOM');
+                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Will add/remove from DOM on hover/leave events');
 
-                if (isSettingsButtonDirectChild) {
-                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) {
-                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
-                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #5: Inserted PiP button (hidden, shows on hover)');
-                    }
-                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) {
-                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance || settingsButton);
-                        console.log('[EYV FORCE TOUCH] DIAGNOSTIC #5: Inserted sticky button (hidden, shows on hover)');
-                    }
-                } else {
-                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
-                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
-                    if (DEBUG) console.log('[EYV DBG] Used prepend fallback for button insertion');
-                }
+                // Store buttons for later insertion
+                const buttonsToInsert = { sticky: stickyButtonElement, pip: pipBtnInstance };
 
-                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #5: Buttons hidden by default (display:none), visible on hover. Testing if Force Touch works!');
+                // Add hover listeners to dynamically insert/remove buttons
+                const insertButtons = () => {
+                    const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+                    if (buttonsToInsert.pip && !playerRightControls.contains(buttonsToInsert.pip)) {
+                        if (settingsButton) {
+                            playerRightControls.insertBefore(buttonsToInsert.pip, settingsButton);
+                        } else {
+                            playerRightControls.appendChild(buttonsToInsert.pip);
+                        }
+                        // Make visible
+                        buttonsToInsert.pip.style.display = 'inline-flex';
+                    }
+                    if (buttonsToInsert.sticky && !playerRightControls.contains(buttonsToInsert.sticky)) {
+                        if (settingsButton) {
+                            playerRightControls.insertBefore(buttonsToInsert.sticky, buttonsToInsert.pip || settingsButton);
+                        } else {
+                            playerRightControls.appendChild(buttonsToInsert.sticky);
+                        }
+                        // Make visible
+                        buttonsToInsert.sticky.style.display = 'inline-flex';
+                    }
+                };
+
+                const removeButtons = () => {
+                    if (buttonsToInsert.pip && playerRightControls.contains(buttonsToInsert.pip)) {
+                        buttonsToInsert.pip.remove();
+                    }
+                    if (buttonsToInsert.sticky && playerRightControls.contains(buttonsToInsert.sticky)) {
+                        buttonsToInsert.sticky.remove();
+                    }
+                };
+
+                // Listen for mouse enter/leave on the control bar
+                cleanupRegistry.addListener(playerRightControls, 'mouseenter', insertButtons);
+                cleanupRegistry.addListener(playerRightControls, 'mouseleave', removeButtons);
+
+                console.log('[EYV FORCE TOUCH] DIAGNOSTIC #6: Buttons will be added to DOM ONLY when hovering controls');
 
                 // Sync our button dimensions with YouTube's native buttons
                 syncButtonDimensions();

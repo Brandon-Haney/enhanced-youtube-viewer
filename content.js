@@ -640,6 +640,78 @@
                 if (!videoElementsWithListeners.has(videoElement)) {
                     // Settings already loaded in initializeControls(), no need to load again
 
+                    // --- FORCE TOUCH DEBUGGING ---
+                    // Add comprehensive Force Touch event logging to diagnose macOS trackpad issues
+                    const logForceTouchEvent = (eventName, event, target) => {
+                        const isStickyActive = playerElementRef?.classList.contains('eyv-player-fixed');
+                        const videoElComputedStyle = window.getComputedStyle(videoElement);
+                        const playerComputedStyle = playerElementRef ? window.getComputedStyle(playerElementRef) : null;
+
+                        console.log(`[EYV FORCE TOUCH] ${eventName} on ${target}:`, {
+                            target: event.target.tagName + (event.target.id ? '#' + event.target.id : '') + (event.target.className ? '.' + event.target.className.split(' ')[0] : ''),
+                            currentTarget: event.currentTarget.tagName + (event.currentTarget.id ? '#' + event.currentTarget.id : ''),
+                            webkitForce: event.webkitForce,
+                            button: event.button,
+                            buttons: event.buttons,
+                            clientX: event.clientX,
+                            clientY: event.clientY,
+                            timeStamp: event.timeStamp,
+                            stickyModeActive: isStickyActive,
+                            videoPointerEvents: videoElComputedStyle.pointerEvents,
+                            playerPointerEvents: playerComputedStyle?.pointerEvents,
+                            videoZIndex: videoElComputedStyle.zIndex,
+                            playerZIndex: playerComputedStyle?.zIndex
+                        });
+                    };
+
+                    // Listen on video element
+                    if (typeof videoElement.addEventListener === 'function') {
+                        cleanupRegistry.addListener(videoElement, 'webkitmouseforcewillbegin', (e) => {
+                            logForceTouchEvent('webkitmouseforcewillbegin', e, 'VIDEO');
+                        });
+                        cleanupRegistry.addListener(videoElement, 'webkitmouseforcedown', (e) => {
+                            logForceTouchEvent('webkitmouseforcedown', e, 'VIDEO');
+                        });
+                        cleanupRegistry.addListener(videoElement, 'webkitmouseforceup', (e) => {
+                            logForceTouchEvent('webkitmouseforceup', e, 'VIDEO');
+                        });
+                        cleanupRegistry.addListener(videoElement, 'webkitmouseforcechanged', (e) => {
+                            logForceTouchEvent('webkitmouseforcechanged', e, 'VIDEO');
+                        });
+                        console.log('[EYV FORCE TOUCH] Attached Force Touch listeners to video element');
+                    }
+
+                    // Listen on player element
+                    if (typeof player.addEventListener === 'function') {
+                        cleanupRegistry.addListener(player, 'webkitmouseforcewillbegin', (e) => {
+                            logForceTouchEvent('webkitmouseforcewillbegin', e, 'PLAYER');
+                        });
+                        cleanupRegistry.addListener(player, 'webkitmouseforcedown', (e) => {
+                            logForceTouchEvent('webkitmouseforcedown', e, 'PLAYER');
+                        });
+                        cleanupRegistry.addListener(player, 'webkitmouseforceup', (e) => {
+                            logForceTouchEvent('webkitmouseforceup', e, 'PLAYER');
+                        });
+                        cleanupRegistry.addListener(player, 'webkitmouseforcechanged', (e) => {
+                            logForceTouchEvent('webkitmouseforcechanged', e, 'PLAYER');
+                        });
+                        console.log('[EYV FORCE TOUCH] Attached Force Touch listeners to player element');
+                    }
+
+                    // Listen on document (catch-all)
+                    cleanupRegistry.addListener(document, 'webkitmouseforcewillbegin', (e) => {
+                        logForceTouchEvent('webkitmouseforcewillbegin', e, 'DOCUMENT');
+                    }, true); // Use capture phase
+                    cleanupRegistry.addListener(document, 'webkitmouseforcedown', (e) => {
+                        logForceTouchEvent('webkitmouseforcedown', e, 'DOCUMENT');
+                    }, true);
+                    cleanupRegistry.addListener(document, 'webkitmouseforceup', (e) => {
+                        logForceTouchEvent('webkitmouseforceup', e, 'DOCUMENT');
+                    }, true);
+
+                    console.log('[EYV FORCE TOUCH] Force Touch debugging active - hard press on trackpad to see events');
+                    // --- END FORCE TOUCH DEBUGGING ---
+
                     if (!progressBar.dataset.eyvScrubListener) {
                         cleanupRegistry.addListener(progressBar, 'mousedown', () => {
                             isScrubbing = true;

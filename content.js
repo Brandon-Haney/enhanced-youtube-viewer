@@ -640,78 +640,13 @@
                 if (!videoElementsWithListeners.has(videoElement)) {
                     // Settings already loaded in initializeControls(), no need to load again
 
-                    // --- FORCE TOUCH DEBUGGING ---
-                    // Add comprehensive Force Touch event logging to diagnose macOS trackpad issues
-                    const logForceTouchEvent = (eventName, event, target) => {
-                        const isStickyActive = playerElementRef?.classList.contains('eyv-player-fixed');
-                        const videoElComputedStyle = window.getComputedStyle(videoElement);
-                        const playerComputedStyle = playerElementRef ? window.getComputedStyle(playerElementRef) : null;
+                    // --- FORCE TOUCH DIAGNOSTIC MODE ---
+                    // Test hypothesis: Video event listeners are blocking Force Touch
+                    console.log('[EYV FORCE TOUCH] DIAGNOSTIC: Skipping video element listeners (pause/play/ended) to test if they block Force Touch');
+                    console.log('[EYV FORCE TOUCH] DIAGNOSTIC: Force Touch should now work. If it does, we know the issue.');
 
-                        console.log(`[EYV FORCE TOUCH] ${eventName} on ${target}:`, {
-                            target: event.target.tagName + (event.target.id ? '#' + event.target.id : '') + (event.target.className ? '.' + event.target.className.split(' ')[0] : ''),
-                            currentTarget: event.currentTarget.tagName + (event.currentTarget.id ? '#' + event.currentTarget.id : ''),
-                            webkitForce: event.webkitForce,
-                            button: event.button,
-                            buttons: event.buttons,
-                            clientX: event.clientX,
-                            clientY: event.clientY,
-                            timeStamp: event.timeStamp,
-                            stickyModeActive: isStickyActive,
-                            videoPointerEvents: videoElComputedStyle.pointerEvents,
-                            playerPointerEvents: playerComputedStyle?.pointerEvents,
-                            videoZIndex: videoElComputedStyle.zIndex,
-                            playerZIndex: playerComputedStyle?.zIndex
-                        });
-                    };
-
-                    // Listen on video element
-                    if (typeof videoElement.addEventListener === 'function') {
-                        cleanupRegistry.addListener(videoElement, 'webkitmouseforcewillbegin', (e) => {
-                            logForceTouchEvent('webkitmouseforcewillbegin', e, 'VIDEO');
-                        });
-                        cleanupRegistry.addListener(videoElement, 'webkitmouseforcedown', (e) => {
-                            logForceTouchEvent('webkitmouseforcedown', e, 'VIDEO');
-                        });
-                        cleanupRegistry.addListener(videoElement, 'webkitmouseforceup', (e) => {
-                            logForceTouchEvent('webkitmouseforceup', e, 'VIDEO');
-                        });
-                        cleanupRegistry.addListener(videoElement, 'webkitmouseforcechanged', (e) => {
-                            logForceTouchEvent('webkitmouseforcechanged', e, 'VIDEO');
-                        });
-                        console.log('[EYV FORCE TOUCH] Attached Force Touch listeners to video element');
-                    }
-
-                    // Listen on player element
-                    if (typeof player.addEventListener === 'function') {
-                        cleanupRegistry.addListener(player, 'webkitmouseforcewillbegin', (e) => {
-                            logForceTouchEvent('webkitmouseforcewillbegin', e, 'PLAYER');
-                        });
-                        cleanupRegistry.addListener(player, 'webkitmouseforcedown', (e) => {
-                            logForceTouchEvent('webkitmouseforcedown', e, 'PLAYER');
-                        });
-                        cleanupRegistry.addListener(player, 'webkitmouseforceup', (e) => {
-                            logForceTouchEvent('webkitmouseforceup', e, 'PLAYER');
-                        });
-                        cleanupRegistry.addListener(player, 'webkitmouseforcechanged', (e) => {
-                            logForceTouchEvent('webkitmouseforcechanged', e, 'PLAYER');
-                        });
-                        console.log('[EYV FORCE TOUCH] Attached Force Touch listeners to player element');
-                    }
-
-                    // Listen on document (catch-all)
-                    cleanupRegistry.addListener(document, 'webkitmouseforcewillbegin', (e) => {
-                        logForceTouchEvent('webkitmouseforcewillbegin', e, 'DOCUMENT');
-                    }, true); // Use capture phase
-                    cleanupRegistry.addListener(document, 'webkitmouseforcedown', (e) => {
-                        logForceTouchEvent('webkitmouseforcedown', e, 'DOCUMENT');
-                    }, true);
-                    cleanupRegistry.addListener(document, 'webkitmouseforceup', (e) => {
-                        logForceTouchEvent('webkitmouseforceup', e, 'DOCUMENT');
-                    }, true);
-
-                    console.log('[EYV FORCE TOUCH] Force Touch debugging active - hard press on trackpad to see events');
-                    // --- END FORCE TOUCH DEBUGGING ---
-
+                    // TEMPORARY: Comment out ALL video element listeners to test
+                    /*
                     if (!progressBar.dataset.eyvScrubListener) {
                         cleanupRegistry.addListener(progressBar, 'mousedown', () => {
                             isScrubbing = true;
@@ -819,8 +754,13 @@
                     });
 
                     videoElementsWithListeners.add(videoElement);
+                    */
+                    // END TEMPORARY COMMENT - Close the block that adds video listeners
+
+                    // Still mark as processed to prevent re-running
+                    videoElementsWithListeners.add(videoElement);
                 }
-                
+
                 if (pipBtnInstance && !pipButtonsWithListeners.has(pipBtnInstance)) {
                     // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
                     if (document.pictureInPictureElement === videoElement) { pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; }

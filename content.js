@@ -1633,13 +1633,14 @@
                 position: fixed !important;
                 z-index: ${zIndex} !important;
                 background-color: var(--yt-spec-base-background, #0f0f0f);
-                box-sizing: border-box !important; 
+                box-sizing: border-box !important;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                pointer-events: auto !important;
             }
 
             .eyv-player-fixed > div#movie_player,
             .eyv-player-fixed > div.html5-video-player {
-                width: 100% !important; 
+                width: 100% !important;
                 height: 100% !important;
                 max-width: 100% !important;
                 max-height: 100% !important;
@@ -1648,17 +1649,19 @@
                 bottom: auto !important;
                 right: auto !important;
                 transform: none !important;
+                pointer-events: auto !important;
             }
 
             .eyv-player-fixed .html5-video-container,
             .eyv-player-fixed video.html5-main-video {
-                width: 100% !important; 
+                width: 100% !important;
                 height: 100% !important;
-                max-width: 100% !important; 
-                max-height: 100% !important; 
+                max-width: 100% !important;
+                max-height: 100% !important;
                 object-fit: contain !important;
                 top: 0 !important;
                 left: 0 !important;
+                pointer-events: auto !important;
             }
 
             #eyv-player-placeholder {

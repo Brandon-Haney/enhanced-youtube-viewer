@@ -804,22 +804,28 @@
                 // Add hover listeners to dynamically insert/remove buttons
                 const insertButtons = () => {
                     const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
+
+                    // Insert PiP button first
                     if (buttonsToInsert.pip && !playerRightControls.contains(buttonsToInsert.pip)) {
-                        if (settingsButton) {
+                        if (settingsButton && settingsButton.parentNode === playerRightControls) {
                             playerRightControls.insertBefore(buttonsToInsert.pip, settingsButton);
                         } else {
                             playerRightControls.appendChild(buttonsToInsert.pip);
                         }
-                        // Make visible
                         buttonsToInsert.pip.style.display = 'inline-flex';
                     }
+
+                    // Insert sticky button (using pip as reference if it's in DOM)
                     if (buttonsToInsert.sticky && !playerRightControls.contains(buttonsToInsert.sticky)) {
-                        if (settingsButton) {
-                            playerRightControls.insertBefore(buttonsToInsert.sticky, buttonsToInsert.pip || settingsButton);
+                        // Use pip button as reference only if it's already in the DOM
+                        const pipInDOM = buttonsToInsert.pip && playerRightControls.contains(buttonsToInsert.pip);
+                        const referenceNode = pipInDOM ? buttonsToInsert.pip : settingsButton;
+
+                        if (referenceNode && referenceNode.parentNode === playerRightControls) {
+                            playerRightControls.insertBefore(buttonsToInsert.sticky, referenceNode);
                         } else {
                             playerRightControls.appendChild(buttonsToInsert.sticky);
                         }
-                        // Make visible
                         buttonsToInsert.sticky.style.display = 'inline-flex';
                     }
                 };

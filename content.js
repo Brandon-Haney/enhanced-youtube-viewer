@@ -577,28 +577,33 @@
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
-                        // Only create sticky player button if enabled
+                        // FORCE TOUCH FIX: Create buttons but don't add to DOM until hover
+                        // This prevents interference with macOS Force Touch pause/play functionality
+
                         stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                         if (!stickyButtonElement && stickyPlayerEnabled) {
                             stickyButtonElement = createStickyButtonLogic(player, videoElement);
-                            // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant defined in extension code (no user input)
-                            Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Toggle Sticky Player', innerHTML: pinSVGIcon });
+                            stickyButtonElement.className = 'ytp-button eyv-player-button';
+                            stickyButtonElement.innerHTML = pinSVGIcon;
+                            stickyButtonElement.title = 'Toggle Sticky Player';
                             stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                            // Set display (will be shown when inserted on hover)
+                            stickyButtonElement.style.display = 'inline-flex';
                         } else if (stickyButtonElement && !stickyPlayerEnabled) {
-                            // Button exists but should be hidden
                             stickyButtonElement.remove();
                             stickyButtonElement = null;
                         }
 
-                        // Only create PiP button if enabled
                         let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
                         if (!pipBtnInstance && pipEnabled) {
                             pipBtnInstance = createPiPButtonLogic(videoElement);
-                            // SECURITY: innerHTML is safe here - pipSVGDefault is a static SVG string constant defined in extension code (no user input)
-                            Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
+                            pipBtnInstance.className = 'ytp-button eyv-pip-button';
+                            pipBtnInstance.innerHTML = pipSVGDefault;
+                            pipBtnInstance.title = 'Toggle Picture-in-Picture';
                             pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
+                            // Set display (will be shown when inserted on hover)
+                            pipBtnInstance.style.display = 'inline-flex';
                         } else if (pipBtnInstance && !pipEnabled) {
-                            // Button exists but should be hidden
                             pipBtnInstance.remove();
                             pipBtnInstance = null;
                         }
@@ -748,7 +753,7 @@
 
                     videoElementsWithListeners.add(videoElement);
                 }
-                
+
                 if (pipBtnInstance && !pipButtonsWithListeners.has(pipBtnInstance)) {
                     // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
                     if (document.pictureInPictureElement === videoElement) { pipBtnInstance.classList.add('active'); pipBtnInstance.innerHTML = pipSVGActive; }
@@ -784,33 +789,64 @@
                     });
                     pipButtonsWithListeners.add(pipBtnInstance);
                 }
-                // Insert buttons into player controls with fallback logic for YouTube DOM changes
-                const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
 
-                // Check if settings button is a direct child of playerRightControls
-                const isSettingsButtonDirectChild = settingsButton && settingsButton.parentNode === playerRightControls;
+                // FORCE TOUCH FIX: Dynamically add/remove buttons on hover
+                // Buttons are only added to DOM when hovering over controls, preventing
+                // interference with macOS Force Touch pause/play functionality
 
-                if (isSettingsButtonDirectChild) {
-                    // Settings button is a direct child, safe to use insertBefore
-                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) {
-                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
-                    } else if (pipBtnInstance && pipBtnInstance.nextSibling !== settingsButton) {
-                        // PiP button exists but not in correct position
-                        playerRightControls.insertBefore(pipBtnInstance, settingsButton);
+                // Store buttons for later insertion
+                const buttonsToInsert = { sticky: stickyButtonElement, pip: pipBtnInstance };
+
+                // Add hover listeners to dynamically insert/remove buttons
+                const insertButtons = () => {
+                    // Insert at the beginning of RIGHT controls (leftmost position within right controls)
+                    const firstButton = playerRightControls.firstChild;
+
+                    // Insert sticky button first (leftmost in right controls)
+                    if (buttonsToInsert.sticky && !playerRightControls.contains(buttonsToInsert.sticky)) {
+                        if (firstButton) {
+                            playerRightControls.insertBefore(buttonsToInsert.sticky, firstButton);
+                        } else {
+                            playerRightControls.appendChild(buttonsToInsert.sticky);
+                        }
+                        buttonsToInsert.sticky.style.display = 'inline-flex';
+                        // Trigger animation after a tiny delay to ensure CSS transition works
+                        setTimeout(() => buttonsToInsert.sticky?.classList.add('eyv-animate-in'), 10);
                     }
 
-                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) {
-                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance || settingsButton);
-                    } else if (stickyButtonElement && pipBtnInstance && stickyButtonElement.nextSibling !== pipBtnInstance) {
-                        // Sticky button exists but not in correct position
-                        playerRightControls.insertBefore(stickyButtonElement, pipBtnInstance);
+                    // Insert PiP button after sticky (second from left in right controls)
+                    if (buttonsToInsert.pip && !playerRightControls.contains(buttonsToInsert.pip)) {
+                        // Insert after sticky button if it exists, otherwise at the beginning
+                        const referenceNode = buttonsToInsert.sticky && playerRightControls.contains(buttonsToInsert.sticky)
+                            ? buttonsToInsert.sticky.nextSibling
+                            : firstButton;
+
+                        if (referenceNode) {
+                            playerRightControls.insertBefore(buttonsToInsert.pip, referenceNode);
+                        } else {
+                            playerRightControls.appendChild(buttonsToInsert.pip);
+                        }
+                        buttonsToInsert.pip.style.display = 'inline-flex';
+                        // Trigger animation after a tiny delay to ensure CSS transition works
+                        setTimeout(() => buttonsToInsert.pip?.classList.add('eyv-animate-in'), 10);
                     }
-                } else {
-                    // Fallback: prepend buttons if settings button structure changed
-                    if (DEBUG) console.log('[EYV DBG] Settings button not direct child or not found, using prepend fallback');
-                    if (pipBtnInstance && !playerRightControls.contains(pipBtnInstance)) playerRightControls.prepend(pipBtnInstance);
-                    if (stickyButtonElement && !playerRightControls.contains(stickyButtonElement)) playerRightControls.prepend(stickyButtonElement);
-                }
+                };
+
+                const removeButtons = () => {
+                    // Remove buttons from DOM and reset animation
+                    if (buttonsToInsert.pip && buttonsToInsert.pip.parentNode) {
+                        buttonsToInsert.pip.classList.remove('eyv-animate-in');
+                        buttonsToInsert.pip.remove();
+                    }
+                    if (buttonsToInsert.sticky && buttonsToInsert.sticky.parentNode) {
+                        buttonsToInsert.sticky.classList.remove('eyv-animate-in');
+                        buttonsToInsert.sticky.remove();
+                    }
+                };
+
+                // Listen for mouse enter/leave on right control bar
+                cleanupRegistry.addListener(playerRightControls, 'mouseenter', insertButtons);
+                cleanupRegistry.addListener(playerRightControls, 'mouseleave', removeButtons);
 
                 // Sync our button dimensions with YouTube's native buttons
                 syncButtonDimensions();
@@ -1633,13 +1669,14 @@
                 position: fixed !important;
                 z-index: ${zIndex} !important;
                 background-color: var(--yt-spec-base-background, #0f0f0f);
-                box-sizing: border-box !important; 
+                box-sizing: border-box !important;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+                pointer-events: none !important;
             }
 
             .eyv-player-fixed > div#movie_player,
             .eyv-player-fixed > div.html5-video-player {
-                width: 100% !important; 
+                width: 100% !important;
                 height: 100% !important;
                 max-width: 100% !important;
                 max-height: 100% !important;
@@ -1648,17 +1685,26 @@
                 bottom: auto !important;
                 right: auto !important;
                 transform: none !important;
+                pointer-events: auto !important;
             }
 
             .eyv-player-fixed .html5-video-container,
             .eyv-player-fixed video.html5-main-video {
-                width: 100% !important; 
+                width: 100% !important;
                 height: 100% !important;
-                max-width: 100% !important; 
-                max-height: 100% !important; 
+                max-width: 100% !important;
+                max-height: 100% !important;
                 object-fit: contain !important;
                 top: 0 !important;
                 left: 0 !important;
+                pointer-events: auto !important;
+            }
+
+            .eyv-player-fixed .ytp-chrome-bottom,
+            .eyv-player-fixed .ytp-gradient-bottom,
+            .eyv-player-fixed .ytp-chrome-top,
+            .eyv-player-fixed .ytp-gradient-top {
+                pointer-events: auto !important;
             }
 
             #eyv-player-placeholder {
@@ -1672,7 +1718,6 @@
             }
 
             .eyv-player-button, .eyv-pip-button {
-                display: inline-flex !important;
                 align-items: center !important;
                 justify-content: center !important;
                 padding: 0 !important;
@@ -1684,6 +1729,15 @@
                 margin: 0 !important;
                 cursor: pointer !important;
                 overflow: visible !important;
+                /* Slide-in animation from right to left */
+                transform: translateX(40px) !important;
+                opacity: 0 !important;
+                transition: transform 0.2s cubic-bezier(0.4, 0.0, 0.2, 1), opacity 0.2s cubic-bezier(0.4, 0.0, 0.2, 1) !important;
+            }
+
+            .eyv-player-button.eyv-animate-in, .eyv-pip-button.eyv-animate-in {
+                transform: translateX(0) !important;
+                opacity: 1 !important;
             }
 
             .eyv-player-button svg, .eyv-pip-button svg { 

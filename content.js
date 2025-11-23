@@ -810,6 +810,8 @@
                             playerRightControls.appendChild(buttonsToInsert.sticky);
                         }
                         buttonsToInsert.sticky.style.display = 'inline-flex';
+                        // Trigger animation after a tiny delay to ensure CSS transition works
+                        setTimeout(() => buttonsToInsert.sticky?.classList.add('eyv-animate-in'), 10);
                     }
 
                     // Insert PiP button after sticky (second from left in right controls)
@@ -825,15 +827,19 @@
                             playerRightControls.appendChild(buttonsToInsert.pip);
                         }
                         buttonsToInsert.pip.style.display = 'inline-flex';
+                        // Trigger animation after a tiny delay to ensure CSS transition works
+                        setTimeout(() => buttonsToInsert.pip?.classList.add('eyv-animate-in'), 10);
                     }
                 };
 
                 const removeButtons = () => {
-                    // Remove buttons from DOM
+                    // Remove buttons from DOM and reset animation
                     if (buttonsToInsert.pip && buttonsToInsert.pip.parentNode) {
+                        buttonsToInsert.pip.classList.remove('eyv-animate-in');
                         buttonsToInsert.pip.remove();
                     }
                     if (buttonsToInsert.sticky && buttonsToInsert.sticky.parentNode) {
+                        buttonsToInsert.sticky.classList.remove('eyv-animate-in');
                         buttonsToInsert.sticky.remove();
                     }
                 };
@@ -1723,6 +1729,15 @@
                 margin: 0 !important;
                 cursor: pointer !important;
                 overflow: visible !important;
+                /* Slide-in animation from right to left */
+                transform: translateX(40px) !important;
+                opacity: 0 !important;
+                transition: transform 0.2s cubic-bezier(0.4, 0.0, 0.2, 1), opacity 0.2s cubic-bezier(0.4, 0.0, 0.2, 1) !important;
+            }
+
+            .eyv-player-button.eyv-animate-in, .eyv-pip-button.eyv-animate-in {
+                transform: translateX(0) !important;
+                opacity: 1 !important;
             }
 
             .eyv-player-button svg, .eyv-pip-button svg { 

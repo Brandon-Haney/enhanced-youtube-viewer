@@ -403,3 +403,4 @@ FodyWeavers.xsd
 /.claude
 CLAUDE.md
 *.md
+.DS_Store

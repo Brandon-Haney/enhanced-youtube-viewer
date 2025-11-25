@@ -44,20 +44,32 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Helper to wrap storage operations with timeout (5 second max)
+    // Uses a settled flag to prevent race condition between timeout and operation completion
     function storageWithTimeout(operation, timeoutMs = 5000) {
         return new Promise((resolve, reject) => {
+            let settled = false;
+
             const timer = setTimeout(() => {
-                reject(new Error('Storage operation timed out'));
+                if (!settled) {
+                    settled = true;
+                    reject(new Error('Storage operation timed out'));
+                }
             }, timeoutMs);
 
             operation()
                 .then(result => {
-                    clearTimeout(timer);
-                    resolve(result);
+                    if (!settled) {
+                        settled = true;
+                        clearTimeout(timer);
+                        resolve(result);
+                    }
                 })
                 .catch(error => {
-                    clearTimeout(timer);
-                    reject(error);
+                    if (!settled) {
+                        settled = true;
+                        clearTimeout(timer);
+                        reject(error);
+                    }
                 });
         });
     }
@@ -155,9 +167,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         console.log('[EYV Popup] Loaded settings:', result);
 
-        // Update action cards
+        // Update action cards with null checks
         const stickyStatus = stickyPlayerCard.querySelector('.action-status');
         const pipStatus = pipCard.querySelector('.action-status');
+        if (!stickyStatus || !pipStatus) {
+            console.error('[EYV Popup] Action status elements not found');
+            return;
+        }
         updateActionCardUI(stickyPlayerCard, stickyStatus, result.stickyPlayerEnabled);
         updateActionCardUI(pipCard, pipStatus, result.pipEnabled);
 
@@ -274,6 +290,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         return;
                     }
                     showSaveConfirmation();
+                    // Notify content script so it can immediately activate sticky if enabled
+                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'defaultStickyEnabled', value: newValue });
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);

@@ -97,7 +97,12 @@
             currentVideoElement = null;
             stickyButtonElement = null; // Clear button reference too
 
-            if (DEBUG) console.log('[EYV DBG] Cleanup complete: all listeners, observers, intervals, state flags, and UI elements removed.');
+            // FIX: Reset WeakSets to prevent "already attached" detection on navigation back
+            // WeakSets can't be cleared, so we create new ones
+            videoElementsWithListeners = new WeakSet();
+            pipButtonsWithListeners = new WeakSet();
+
+            if (DEBUG) console.log('[EYV DBG] Cleanup complete: all listeners, observers, intervals, state flags, WeakSets, and UI elements removed.');
         }
     };
 
@@ -108,19 +113,24 @@
         try {
             if (DEBUG) console.log('[EYV DBG] YouTube navigation starting, cleaning up...');
 
-            // Only clean up if sticky mode was actually active
-            if (stickyButtonElement?.classList.contains('active')) {
-                if (DEBUG) console.log('[EYV DBG] Sticky mode was active, deactivating before navigation');
+            // FIX: Check for the fixed class directly, not just the button state
+            // This handles the case where the button was removed but the player is still sticky
+            const fixedPlayer = document.querySelector('.eyv-player-fixed');
+            const isStickyActive = stickyButtonElement?.classList.contains('active') || fixedPlayer;
 
-                // Use playerElementRef if available
-                if (playerElementRef && playerElementRef.isConnected) {
-                    playerElementRef.classList.remove('eyv-player-fixed');
-                    // Only clear inline styles if the element has our class
-                    playerElementRef.style.removeProperty('width');
-                    playerElementRef.style.removeProperty('height');
-                    playerElementRef.style.removeProperty('left');
-                    playerElementRef.style.removeProperty('top');
-                    playerElementRef.style.removeProperty('transform');
+            if (isStickyActive) {
+                if (DEBUG) console.log('[EYV DBG] Sticky mode detected, cleaning up...');
+
+                // Use the found element or the ref
+                const targetPlayer = fixedPlayer || playerElementRef;
+
+                if (targetPlayer && targetPlayer.isConnected) {
+                    targetPlayer.classList.remove('eyv-player-fixed');
+                    targetPlayer.style.removeProperty('width');
+                    targetPlayer.style.removeProperty('height');
+                    targetPlayer.style.removeProperty('left');
+                    targetPlayer.style.removeProperty('top');
+                    targetPlayer.style.removeProperty('transform');
                     if (DEBUG) console.log('[EYV DBG] Cleared sticky styles from player');
                 }
 
@@ -214,10 +224,20 @@
     let wasStickyBeforeEnd = false; // Track if sticky was active when video ended
     let wasStickyDuringCurrentVideo = false; // Track if sticky was EVER active during current video playback
     let isAutoPauseResumeActive = false; // Flag to prevent interference with user pause/play
+    let isResizingPlayer = false; // Flag to prevent resize event loops
+    let cachedButtonWidth = null; // Cached button dimensions for dynamic insertion
+    let cachedButtonHeight = null;
+    let lastSyncedWidth = null; // Track last synced dimensions to detect changes
+    let lastSyncedHeight = null;
+    let activeSyncInterval = null; // Track active sync polling to prevent overlaps
+
+    // FIX: Move buttonsToInsert to global scope so onMessage can update it dynamically
+    const buttonsToInsert = { sticky: null, pip: null };
 
     // WeakSets to track elements with attached listeners (survives element replacement)
-    const videoElementsWithListeners = new WeakSet();
-    const pipButtonsWithListeners = new WeakSet();
+    // Using 'let' instead of 'const' so we can reset them in cleanup()
+    let videoElementsWithListeners = new WeakSet();
+    let pipButtonsWithListeners = new WeakSet();
 
     // --- ADD MESSAGE LISTENER FOR POPUP SETTINGS ---
     // Validate Chrome context before registering listener
@@ -278,6 +298,13 @@
                                     innerHTML: pinSVGIcon
                                 });
                                 stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                                stickyButtonElement.style.display = 'inline-flex';
+
+                                // FIX: Sync dimension immediately
+                                if (cachedButtonWidth) {
+                                    stickyButtonElement.style.width = cachedButtonWidth;
+                                    stickyButtonElement.style.height = cachedButtonHeight;
+                                }
 
                                 // Insert it in the correct position
                                 const settingsButton = playerRightControls.querySelector('.ytp-settings-button');
@@ -289,22 +316,48 @@
                                     playerRightControls.prepend(stickyButtonElement);
                                 }
 
+                                // FIX: Update global reference for hover logic
+                                buttonsToInsert.sticky = stickyButtonElement;
+
+                                // FIX: Add animation class so it becomes visible
+                                setTimeout(() => stickyButtonElement?.classList.add('eyv-animate-in'), 10);
+
+                                // FIX: Check if auto-activate is enabled and activate immediately
+                                if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                                    chrome.storage.local.get(['defaultStickyEnabled'], (result) => {
+                                        if (result.defaultStickyEnabled && stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
+                                            setTimeout(() => {
+                                                stickyButtonElement.click();
+                                                if (DEBUG) console.log('[EYV DBG] Auto-activated sticky player (defaultStickyEnabled is true)');
+                                            }, 100);
+                                        }
+                                    });
+                                }
+
                                 if (DEBUG) console.log('[EYV DBG] Sticky player button created');
                             } else {
                                 if (DEBUG) console.log('[EYV DBG] Cannot create sticky button - player elements not found');
                             }
                         }
                     } else {
-                        // DISABLE: Remove button if it exists
-                        if (stickyBtn) {
-                            // Deactivate sticky mode if active
-                            if (stickyBtn.classList.contains('active')) {
-                                stickyBtn.click();
-                            }
-                            stickyBtn.remove();
-                            stickyButtonElement = null;
-                            if (DEBUG) console.log('[EYV DBG] Sticky player button removed');
+                        // DISABLE
+
+                        // 1. Handle Deactivation (Check in-memory element if DOM element is missing)
+                        const targetBtn = stickyBtn || stickyButtonElement;
+                        if (targetBtn && targetBtn.classList.contains('active')) {
+                            targetBtn.click(); // Deactivate sticky mode
                         }
+
+                        // 2. Remove from DOM if it exists
+                        if (stickyBtn) {
+                            stickyBtn.remove();
+                        }
+
+                        // 3. FIX: Clear global refs even if button wasn't in DOM (due to mouseout)
+                        stickyButtonElement = null;
+                        buttonsToInsert.sticky = null;
+
+                        if (DEBUG) console.log('[EYV DBG] Sticky player button removed');
                     }
                 } else if (message.feature === 'pip') {
                     pipEnabled = message.enabled;
@@ -318,14 +371,21 @@
                             const videoElement = player?.querySelector('video.html5-main-video');
 
                             if (player && playerRightControls && videoElement) {
-                                // Create the button
-                                const pipBtnInstance = createPiPButtonLogic(videoElement);
+                                // Create the button - pass player container, not videoElement
+                                const pipBtnInstance = createPiPButtonLogic(player);
                                 Object.assign(pipBtnInstance, {
                                     className: 'ytp-button eyv-pip-button',
                                     title: 'Toggle Picture-in-Picture',
                                     innerHTML: pipSVGDefault
                                 });
                                 pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
+                                pipBtnInstance.style.display = 'inline-flex';
+
+                                // FIX: Sync dimension immediately
+                                if (cachedButtonWidth) {
+                                    pipBtnInstance.style.width = cachedButtonWidth;
+                                    pipBtnInstance.style.height = cachedButtonHeight;
+                                }
 
                                 // Attach PiP event listeners
                                 if (!pipButtonsWithListeners.has(pipBtnInstance)) {
@@ -376,17 +436,29 @@
                                     playerRightControls.prepend(pipBtnInstance);
                                 }
 
+                                // FIX: Update global reference for hover logic
+                                buttonsToInsert.pip = pipBtnInstance;
+
+                                // FIX: Add animation class so it becomes visible
+                                setTimeout(() => pipBtnInstance?.classList.add('eyv-animate-in'), 10);
+
                                 if (DEBUG) console.log('[EYV DBG] PiP button created');
                             } else {
                                 if (DEBUG) console.log('[EYV DBG] Cannot create PiP button - player elements not found');
                             }
                         }
                     } else {
-                        // DISABLE: Remove button if it exists
+                        // DISABLE
+
+                        // 1. Remove from DOM if it exists
                         if (pipBtn) {
                             pipBtn.remove();
-                            if (DEBUG) console.log('[EYV DBG] PiP button removed');
                         }
+
+                        // 2. FIX: Clear global refs even if button wasn't in DOM (due to mouseout)
+                        buttonsToInsert.pip = null;
+
+                        if (DEBUG) console.log('[EYV DBG] PiP button removed');
                     }
                 }
                 sendResponse({ status: "ok" });
@@ -597,7 +669,7 @@
 
                         let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
                         if (!pipBtnInstance && pipEnabled) {
-                            pipBtnInstance = createPiPButtonLogic(videoElement);
+                            pipBtnInstance = createPiPButtonLogic(player);
                             pipBtnInstance.className = 'ytp-button eyv-pip-button';
                             pipBtnInstance.innerHTML = pipSVGDefault;
                             pipBtnInstance.title = 'Toggle Picture-in-Picture';
@@ -631,7 +703,7 @@
 
                         let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');
                         if (!pipBtnInstance) {
-                            pipBtnInstance = createPiPButtonLogic(videoElement);
+                            pipBtnInstance = createPiPButtonLogic(player);
                             Object.assign(pipBtnInstance, { className: 'ytp-button eyv-pip-button', title: 'Toggle Picture-in-Picture', innerHTML: pipSVGDefault });
                             pipBtnInstance.setAttribute('aria-label', 'Toggle Picture-in-Picture');
                         }
@@ -643,131 +715,9 @@
         // Continuation of initialization after settings are loaded
         const initializeControlsContinued = (pipBtnInstance, defaultStickyEnabled) => {
 
-                if (!videoElementsWithListeners.has(videoElement)) {
-                    // Settings already loaded in initializeControls(), no need to load again
-
-                    if (!progressBar.dataset.eyvScrubListener) {
-                        cleanupRegistry.addListener(progressBar, 'mousedown', () => {
-                            isScrubbing = true;
-                            if (DEBUG) console.log("[EYV DBG] Scrubbing started (mousedown on progress bar).");
-                        });
-                        // Listen on the whole document for mouseup, as the user might drag outside the bar
-                        cleanupRegistry.addListener(document, 'mouseup', () => {
-                            if (isScrubbing) {
-                                isScrubbing = false;
-                                if (DEBUG) console.log("[EYV DBG] Scrubbing finished (mouseup).");
-                            }
-                        });
-                        // Reset scrubbing flag if mouse leaves window or focus is lost
-                        cleanupRegistry.addListener(document, 'mouseleave', () => {
-                            if (isScrubbing) {
-                                isScrubbing = false;
-                                if (DEBUG) console.log("[EYV DBG] Scrubbing reset (mouse left document).");
-                            }
-                        });
-                        cleanupRegistry.addListener(window, 'blur', () => {
-                            if (isScrubbing) {
-                                isScrubbing = false;
-                                if (DEBUG) console.log("[EYV DBG] Scrubbing reset (window lost focus).");
-                            }
-                        });
-                        progressBar.dataset.eyvScrubListener = "true";
-                    }
-                    
-                    cleanupRegistry.addListener(videoElement, 'pause', () => {
-                        try {
-                            if (isScrubbing) {
-                                if (DEBUG) console.log("[EYV DBG] Paused, but ignored because user is scrubbing.");
-                                return;
-                            }
-                            if (isAdPlaying()) {
-                                if (DEBUG) console.log("[EYV DBG] Paused, but ignored because ad is playing.");
-                                return;
-                            }
-
-                            // Check if video ended (video is paused AND currentTime is at or very near the end)
-                            const isVideoEnded = videoElement.currentTime >= videoElement.duration - 0.5;
-                            if (isVideoEnded) {
-                                if (DEBUG) console.log("[EYV DBG] Paused because video ended (currentTime >= duration). Ignoring pause deactivation.");
-                                return;
-                            }
-
-                            // Only deactivate on pause if it's a real user pause, not our automatic pause/resume
-                            if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active') && !isAutoPauseResumeActive) {
-                                if (DEBUG) console.log("[EYV DBG] Paused. Deactivating sticky mode as per settings.");
-                                // Set flag AFTER deactivating to prevent it from being reset
-                                deactivateStickyModeInternal(true); // Pass true to preserve pause flag
-                                wasStickyBeforePause = true;
-                            } else if (isAutoPauseResumeActive) {
-                                if (DEBUG) console.log("[EYV DBG] Paused during auto pause/resume - skipping deactivation");
-                            }
-                        } catch (error) {
-                            console.error('[EYV] Video pause handler error:', error);
-                        }
-                    });
-
-                    cleanupRegistry.addListener(videoElement, 'play', () => {
-                        try {
-                            // Handle re-activation after pause
-                            if (inactiveWhenPausedEnabled && wasStickyBeforePause) {
-                                wasStickyBeforePause = false; // Consume the flag
-                                const ytdApp = document.querySelector('ytd-app');
-                                const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
-                                const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
-                                if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) {
-                                    if (stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
-                                        if (DEBUG) console.log("[EYV DBG] Resuming play. Re-activating sticky mode.");
-                                        stickyButtonElement.click();
-
-                                        // After reactivating sticky, trigger YouTube's OSD recalculation
-                                        // This ensures OSD controls reposition correctly if chat was opened/closed while paused
-                                        setTimeout(() => {
-                                            window.dispatchEvent(new Event('resize', { bubbles: true }));
-                                            if (DEBUG) console.log('[EYV DBG] Dispatched resize after sticky reactivation');
-                                        }, 150);
-                                        setTimeout(() => {
-                                            window.dispatchEvent(new Event('resize', { bubbles: true }));
-                                            syncButtonDimensions();
-                                        }, 300);
-                                    }
-                                }
-                            }
-
-                            // Note: Re-activation after video ended is now handled in 'loadeddata' event
-                            // which is more reliable for autoplay scenarios where URL changes
-                        } catch (error) {
-                            console.error('[EYV] Video play handler error:', error);
-                        }
-                    });
-
-                    cleanupRegistry.addListener(videoElement, 'ended', () => {
-                        try {
-                            if (DEBUG) console.log("[EYV DBG] Video ended. inactiveAtEndEnabled:", inactiveAtEndEnabled, "sticky currently active:", stickyButtonElement?.classList.contains('active'), "wasStickyDuringCurrentVideo:", wasStickyDuringCurrentVideo);
-
-                            // Check if sticky was EVER active during this video, not just currently active
-                            // This handles the case where "Pause Deactivation" already turned off sticky
-                            if (inactiveAtEndEnabled && wasStickyDuringCurrentVideo) {
-                                if (DEBUG) console.log("[EYV DBG] Video ended and sticky was active during playback. Setting re-activation flag.");
-                                wasStickyBeforeEnd = true; // Remember that sticky was active during this video
-                                // Persist to sessionStorage so it survives YouTube SPA navigation
-                                try {
-                                    sessionStorage.setItem('eyv-wasStickyBeforeEnd', 'true');
-                                    if (DEBUG) console.log('[EYV DBG] Set sessionStorage flag: eyv-wasStickyBeforeEnd = true');
-                                } catch (e) {
-                                    console.error('[EYV] Could not set sessionStorage:', e);
-                                }
-                                // Only deactivate if it's still active
-                                if (stickyButtonElement?.classList.contains('active')) {
-                                    deactivateStickyModeInternal();
-                                }
-                            }
-                        } catch (error) {
-                            console.error('[EYV] Video ended handler error:', error);
-                        }
-                    });
-
-                    videoElementsWithListeners.add(videoElement);
-                }
+                // Attach video event listeners (pause, play, ended) using the helper function
+                // This will be called when video element is replaced (ads, quality changes)
+                attachVideoListeners(videoElement, progressBar);
 
                 if (pipBtnInstance && !pipButtonsWithListeners.has(pipBtnInstance)) {
                     // SECURITY: innerHTML is safe here - pipSVGActive is a static SVG string constant (no user input)
@@ -809,8 +759,9 @@
                 // Buttons are only added to DOM when hovering over controls, preventing
                 // interference with macOS Force Touch pause/play functionality
 
-                // Store buttons for later insertion
-                const buttonsToInsert = { sticky: stickyButtonElement, pip: pipBtnInstance };
+                // FIX: Assign to the global object instead of creating a local one
+                buttonsToInsert.sticky = stickyButtonElement;
+                buttonsToInsert.pip = pipBtnInstance;
 
                 // Add hover listeners to dynamically insert/remove buttons
                 const insertButtons = () => {
@@ -825,6 +776,11 @@
                             playerRightControls.appendChild(buttonsToInsert.sticky);
                         }
                         buttonsToInsert.sticky.style.display = 'inline-flex';
+                        // Apply cached button dimensions immediately
+                        if (cachedButtonWidth && cachedButtonHeight) {
+                            buttonsToInsert.sticky.style.width = cachedButtonWidth;
+                            buttonsToInsert.sticky.style.height = cachedButtonHeight;
+                        }
                         // Trigger animation after a tiny delay to ensure CSS transition works
                         setTimeout(() => buttonsToInsert.sticky?.classList.add('eyv-animate-in'), 10);
                     }
@@ -842,9 +798,19 @@
                             playerRightControls.appendChild(buttonsToInsert.pip);
                         }
                         buttonsToInsert.pip.style.display = 'inline-flex';
+                        // Apply cached button dimensions immediately
+                        if (cachedButtonWidth && cachedButtonHeight) {
+                            buttonsToInsert.pip.style.width = cachedButtonWidth;
+                            buttonsToInsert.pip.style.height = cachedButtonHeight;
+                        }
                         // Trigger animation after a tiny delay to ensure CSS transition works
                         setTimeout(() => buttonsToInsert.pip?.classList.add('eyv-animate-in'), 10);
                     }
+
+                    // CRITICAL: Sync dimensions from YouTube's current button sizes
+                    // This ensures our buttons match YouTube's size at the moment of insertion,
+                    // not stale cached values from before YouTube updated
+                    syncButtonDimensions();
                 };
 
                 const removeButtons = () => {
@@ -862,6 +828,10 @@
                 // Listen for mouse enter/leave on right control bar
                 cleanupRegistry.addListener(playerRightControls, 'mouseenter', insertButtons);
                 cleanupRegistry.addListener(playerRightControls, 'mouseleave', removeButtons);
+
+                // FIX: Add focusin listener for keyboard accessibility
+                // Users navigating with Tab key need buttons to be inserted when they focus into the control bar
+                cleanupRegistry.addListener(playerRightControls, 'focusin', insertButtons);
 
                 // Sync our button dimensions with YouTube's native buttons
                 syncButtonDimensions();
@@ -998,17 +968,50 @@
 
         // Register window and document event listeners (debounce resize for performance)
         const debouncedResize = debounce(() => {
-            // Sync button dimensions on resize
+            // Prevent infinite loop from centerStickyPlayer dispatching resize events
+            if (isResizingPlayer) {
+                if (DEBUG) console.log('[EYV DBG] Already resizing, ignoring nested resize event');
+                return;
+            }
+
+            if (DEBUG) console.log('[EYV DBG] ========== WINDOW RESIZE EVENT FIRED ==========');
+
+            // STEP 1: Resize the player container FIRST
+            if (playerElementRef?.classList.contains('eyv-player-fixed')) {
+                // Set flag to prevent infinite loop
+                isResizingPlayer = true;
+
+                // We run this synchronously (no requestAnimationFrame) to ensure
+                // styles are set before we ask YouTube to recalculate
+                centerStickyPlayer(playerElementRef);
+
+                // Force a browser reflow/layout calc so the DOM updates immediately
+                void playerElementRef.offsetHeight;
+
+                // Clear flag after a short delay
+                setTimeout(() => { isResizingPlayer = false; }, 100);
+            }
+
+            // STEP 2: Sync our custom buttons
             syncButtonDimensions();
 
-            if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                // Use requestAnimationFrame to ensure layout is complete before reading dimensions
-                requestAnimationFrame(() => {
-                    centerStickyPlayer(playerElementRef);
-                });
-            }
+            // STEP 3: Dispatch resize event to update YouTube OSD
+            if (DEBUG) console.log('[EYV DBG] Dispatching resize event to update OSD');
+
+            // CRITICAL FIX: Wrap this dispatch in the flag to prevent infinite loops
+            window.eyvIsDispatching = true;
+            window.dispatchEvent(new Event('resize', { bubbles: true }));
+            window.eyvIsDispatching = false;
+
         }, RESIZE_DEBOUNCE_MS);
-        cleanupRegistry.addListener(window, 'resize', debouncedResize);
+
+        // FIX: Wrapped handler to prevent infinite loops from our own dispatchEvent calls
+        const resizeHandler = (e) => {
+            // Stop the infinite loop: if we caused this resize event, ignore it
+            if (window.eyvIsDispatching) return;
+            debouncedResize();
+        };
+        cleanupRegistry.addListener(window, 'resize', resizeHandler);
         cleanupRegistry.addListener(document, 'fullscreenchange', handleFullscreenChange);
     }
 
@@ -1045,9 +1048,17 @@
                     transform: ''
                 });
             } else {
-                // Normal deactivation - clear all styles
+                // Normal deactivation - clear all styles and force layout recalc
                 playerElementRef.classList.remove('eyv-player-fixed');
                 Object.assign(playerElementRef.style, { width: '', height: '', top: '', left: '', transform: '' });
+
+                // Force browser to recalculate layout by triggering a reflow
+                // This ensures the player immediately takes its correct size from YouTube's layout
+                if (DEBUG) console.log(`[EYV DBG] Forcing layout recalc after deactivation`);
+                void playerElementRef.offsetHeight; // Force reflow
+
+                // Dispatch resize event to ensure YouTube recalculates everything
+                window.dispatchEvent(new Event('resize', { bubbles: true }));
             }
         }
         if (playerPlaceholder && playerPlaceholder.isConnected) playerPlaceholder.style.display = 'none';
@@ -1074,37 +1085,231 @@
         wasStickyBeforeOsFullscreen = false;
     }
     
+    // --- ATTACH VIDEO EVENT LISTENERS ---
+    // Helper to attach listeners to the specific video element
+    // This is called both during initialization and when video element is replaced (ads, quality changes)
+    function attachVideoListeners(videoElement, progressBar) {
+        if (!videoElement || videoElementsWithListeners.has(videoElement)) {
+            if (DEBUG) console.log('[EYV DBG] Skipping listener attachment - already attached or no element');
+            return;
+        }
+
+        if (DEBUG) console.log('[EYV] Attaching listeners to video element', videoElement);
+
+        // 1. Scrubbing Listener (checking if already attached via dataset to be safe)
+        if (progressBar && !progressBar.dataset.eyvScrubListener) {
+            cleanupRegistry.addListener(progressBar, 'mousedown', () => {
+                isScrubbing = true;
+                if (DEBUG) console.log("[EYV DBG] Scrubbing started.");
+            });
+            cleanupRegistry.addListener(document, 'mouseup', () => {
+                if (isScrubbing) isScrubbing = false;
+            });
+            progressBar.dataset.eyvScrubListener = "true";
+        }
+
+        // 2. Pause Listener
+        cleanupRegistry.addListener(videoElement, 'pause', () => {
+            try {
+                if (isScrubbing) {
+                    if (DEBUG) console.log("[EYV DBG] Paused, but ignored because user is scrubbing.");
+                    return;
+                }
+                if (isAdPlaying()) {
+                    if (DEBUG) console.log("[EYV DBG] Paused, but ignored because ad is playing.");
+                    return;
+                }
+
+                // Check if video ended (video is paused AND currentTime is at or very near the end)
+                const isVideoEnded = videoElement.currentTime >= videoElement.duration - 0.5;
+                if (isVideoEnded) {
+                    if (DEBUG) console.log("[EYV DBG] Paused because video ended (currentTime >= duration). Ignoring pause deactivation.");
+                    return;
+                }
+
+                // Only deactivate on pause if it's a real user pause, not our automatic pause/resume
+                if (inactiveWhenPausedEnabled && stickyButtonElement?.classList.contains('active') && !isAutoPauseResumeActive) {
+                    if (DEBUG) console.log("[EYV DBG] Paused. Deactivating sticky mode as per settings.");
+                    // Set flag AFTER deactivating to prevent it from being reset
+                    deactivateStickyModeInternal(true); // Pass true to preserve pause flag
+                    wasStickyBeforePause = true;
+                } else if (isAutoPauseResumeActive) {
+                    if (DEBUG) console.log("[EYV DBG] Paused during auto pause/resume - skipping deactivation");
+                }
+            } catch (error) {
+                console.error('[EYV] Video pause handler error:', error);
+            }
+        });
+
+        // 3. Play Listener
+        cleanupRegistry.addListener(videoElement, 'play', () => {
+            try {
+                // Handle re-activation after pause
+                if (inactiveWhenPausedEnabled && wasStickyBeforePause) {
+                    wasStickyBeforePause = false; // Consume the flag
+                    const ytdApp = document.querySelector('ytd-app');
+                    const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
+                    const isFull = ytdApp?.hasAttribute('fullscreen') || !!document.fullscreenElement;
+                    if (!(document.pictureInPictureElement === videoElement || isMini || isFull)) {
+                        if (stickyButtonElement && !stickyButtonElement.classList.contains('active')) {
+                            if (DEBUG) console.log("[EYV DBG] Resuming play. Re-activating sticky mode.");
+                            stickyButtonElement.click();
+
+                            // After reactivating sticky, trigger YouTube's OSD recalculation
+                            // This ensures OSD controls reposition correctly if chat was opened/closed while paused
+                            setTimeout(() => {
+                                window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                if (DEBUG) console.log('[EYV DBG] Dispatched resize after sticky reactivation');
+                            }, 150);
+                            setTimeout(() => {
+                                window.dispatchEvent(new Event('resize', { bubbles: true }));
+                                syncButtonDimensions();
+                            }, 300);
+                        }
+                    }
+                }
+
+                // Note: Re-activation after video ended is now handled in 'loadeddata' event
+                // which is more reliable for autoplay scenarios where URL changes
+            } catch (error) {
+                console.error('[EYV] Video play handler error:', error);
+            }
+        });
+
+        // 4. Ended Listener
+        cleanupRegistry.addListener(videoElement, 'ended', () => {
+            try {
+                if (DEBUG) console.log("[EYV DBG] Video ended. inactiveAtEndEnabled:", inactiveAtEndEnabled, "sticky currently active:", stickyButtonElement?.classList.contains('active'), "wasStickyDuringCurrentVideo:", wasStickyDuringCurrentVideo);
+
+                // Check if sticky was EVER active during this video, not just currently active
+                // This handles the case where "Pause Deactivation" already turned off sticky
+                if (inactiveAtEndEnabled && wasStickyDuringCurrentVideo) {
+                    if (DEBUG) console.log("[EYV DBG] Video ended and sticky was active during playback. Setting re-activation flag.");
+                    wasStickyBeforeEnd = true; // Remember that sticky was active during this video
+                    // Persist to sessionStorage so it survives YouTube SPA navigation
+                    try {
+                        sessionStorage.setItem('eyv-wasStickyBeforeEnd', 'true');
+                        if (DEBUG) console.log('[EYV DBG] Set sessionStorage flag: eyv-wasStickyBeforeEnd = true');
+                    } catch (e) {
+                        console.error('[EYV] Could not set sessionStorage:', e);
+                    }
+                    // Only deactivate if it's still active
+                    if (stickyButtonElement?.classList.contains('active')) {
+                        deactivateStickyModeInternal();
+                    }
+                }
+            } catch (error) {
+                console.error('[EYV] Video ended handler error:', error);
+            }
+        });
+
+        videoElementsWithListeners.add(videoElement);
+        if (DEBUG) console.log('[EYV] Video listeners attached successfully');
+    }
+
     // --- SYNC BUTTON DIMENSIONS WITH YOUTUBE ---
     function syncButtonDimensions() {
-        // Find a native YouTube button to copy dimensions from
-        const nativeButton = document.querySelector('.ytp-settings-button') ||
-                             document.querySelector('.ytp-fullscreen-button');
+        if (DEBUG) console.log(`[EYV DBG] ====== syncButtonDimensions() ======`);
 
+        // Find ALL native YouTube buttons to compare sizes
+        const settingsBtn = document.querySelector('.ytp-settings-button');
+        const fullscreenBtn = document.querySelector('.ytp-fullscreen-button');
+        const subtitlesBtn = document.querySelector('.ytp-subtitles-button');
+
+        if (DEBUG) console.log(`[EYV DBG] Found native buttons: settings=${!!settingsBtn}, fullscreen=${!!fullscreenBtn}, subtitles=${!!subtitlesBtn}`);
+
+        // Show ALL native button sizes to detect inconsistencies
+        if (DEBUG) {
+            if (settingsBtn) {
+                const s = getComputedStyle(settingsBtn);
+                console.log(`  YT Settings button: ${s.width} x ${s.height}`);
+            } else {
+                console.log(`  YT Settings button: NOT FOUND`);
+            }
+
+            if (fullscreenBtn) {
+                const f = getComputedStyle(fullscreenBtn);
+                console.log(`  YT Fullscreen button: ${f.width} x ${f.height}`);
+            } else {
+                console.log(`  YT Fullscreen button: NOT FOUND`);
+            }
+
+            if (subtitlesBtn) {
+                const c = getComputedStyle(subtitlesBtn);
+                console.log(`  YT Subtitles button: ${c.width} x ${c.height}`);
+            } else {
+                console.log(`  YT Subtitles button: NOT FOUND`);
+            }
+        }
+
+        const nativeButton = settingsBtn || fullscreenBtn;
         if (!nativeButton) {
-            if (DEBUG) console.log('[EYV DBG] No native button found for sync');
-            return;
+            if (DEBUG) console.log('[EYV DBG] NO NATIVE BUTTONS FOUND - YOUTUBE CONTROLS NOT IN DOM!');
+            return false;
         }
 
         const computedStyle = getComputedStyle(nativeButton);
         const width = computedStyle.width;
         const height = computedStyle.height;
 
+        // Check if dimensions actually changed since last sync
+        const dimensionsChanged = (width !== lastSyncedWidth || height !== lastSyncedHeight);
+
         if (DEBUG) {
             const watchFlexy = document.querySelector('ytd-watch-flexy');
             const isTheater = watchFlexy?.hasAttribute('theater');
             const playerEl = document.querySelector('#movie_player');
             const isFullscreen = playerEl?.classList.contains('ytp-fullscreen');
-            console.log(`[EYV DBG] Syncing buttons - Theater: ${isTheater}, Fullscreen: ${isFullscreen}, Native button size: ${width} x ${height}`);
+
+            console.log(`  Mode: Theater=${isTheater}, Fullscreen=${isFullscreen}`);
+            console.log(`  Using: ${width} x ${height} (from ${settingsBtn ? 'settings' : 'fullscreen'} button)`);
+            console.log(`  Last synced: ${lastSyncedWidth} x ${lastSyncedHeight}`);
+            console.log(`  ✨ CHANGED: ${dimensionsChanged}`);
         }
 
-        // Apply to all our buttons
-        const ourButtons = document.querySelectorAll('.eyv-player-button, .eyv-pip-button');
-        ourButtons.forEach(btn => {
-            btn.style.width = width;
-            btn.style.height = height;
-        });
+        // Cache the dimensions
+        cachedButtonWidth = width;
+        cachedButtonHeight = height;
+        lastSyncedWidth = width;
+        lastSyncedHeight = height;
 
-        if (DEBUG) console.log(`[EYV DBG] Applied ${width} x ${height} to ${ourButtons.length} buttons`);
+        // Apply to all our buttons that are currently in the DOM
+        const ourButtons = document.querySelectorAll('.eyv-player-button, .eyv-pip-button');
+        if (DEBUG) console.log(`  Found ${ourButtons.length} of our buttons in DOM`);
+
+        if (DEBUG && ourButtons.length === 0) {
+            console.log(`  ⚠️ Our buttons NOT in DOM (removed on mouseout)`);
+            console.log(`  ✅ Cached for next insertion: ${cachedButtonWidth} x ${cachedButtonHeight}`);
+        }
+
+        if (ourButtons.length > 0) {
+            if (DEBUG) {
+                const firstButton = ourButtons[0];
+                const beforeComputed = window.getComputedStyle(firstButton);
+                console.log(`  Our button BEFORE: ${beforeComputed.width} x ${beforeComputed.height}`);
+            }
+
+            ourButtons.forEach(btn => {
+                btn.style.width = width;
+                btn.style.height = height;
+            });
+
+            if (DEBUG) {
+                const firstButton = ourButtons[0];
+                const afterComputed = window.getComputedStyle(firstButton);
+                console.log(`  Our button AFTER: ${afterComputed.width} x ${afterComputed.height}`);
+
+                // Visual indicator if sizes don't match
+                if (afterComputed.width !== width || afterComputed.height !== height) {
+                    console.log(`  ❌ SIZE MISMATCH! Set ${width}x${height} but got ${afterComputed.width}x${afterComputed.height}`);
+                } else {
+                    console.log(`  ✅ Sizes match perfectly`);
+                }
+            }
+        }
+
+        if (DEBUG) console.log(`[EYV DBG] ============================`);
+        return dimensionsChanged;
     }
 
     // --- STICKY PLAYER LOGIC ---
@@ -1213,6 +1418,8 @@
                             resizeTimeout = setTimeout(() => {
                                 requestAnimationFrame(() => {
                                     centerStickyPlayer(playerElementRef);
+                                    // Sync button dimensions when player resizes
+                                    syncButtonDimensions();
                                 });
                             }, 100); // Wait 100ms after last resize before recalculating
                         }
@@ -1301,10 +1508,40 @@
                                 if (DEBUG) console.log('[EYV DBG] Dispatched resize event for theater mode toggle');
                                 setTimeout(() => { window.eyvResizing = false; }, 50);
                             }
-                            // Sync button dimensions after layout settles
-                            setTimeout(() => {
-                                syncButtonDimensions();
-                            }, 100);
+
+                            // Clear any existing polling interval to prevent overlaps
+                            if (activeSyncInterval) {
+                                clearInterval(activeSyncInterval);
+                                activeSyncInterval = null;
+                                if (DEBUG) console.log('[EYV DBG] Cleared previous sync interval for theater toggle');
+                            }
+
+                            // Sync immediately first
+                            syncButtonDimensions();
+
+                            // Then poll for changes until dimensions stabilize
+                            let attempts = 0;
+                            const maxAttempts = 25; // Try for up to 5 seconds
+                            let unchangedCount = 0;
+
+                            activeSyncInterval = setInterval(() => {
+                                attempts++;
+                                const changed = syncButtonDimensions();
+
+                                if (changed) {
+                                    unchangedCount = 0;
+                                    if (DEBUG) console.log(`[EYV DBG] Theater sync - dimensions updated on attempt ${attempts}`);
+                                } else {
+                                    unchangedCount++;
+                                }
+
+                                // Stop if we've had 3 consecutive unchanged syncs or hit max attempts
+                                if (unchangedCount >= 3 || attempts >= maxAttempts) {
+                                    clearInterval(activeSyncInterval);
+                                    activeSyncInterval = null;
+                                    if (DEBUG) console.log(`[EYV DBG] Theater sync stopped: ${unchangedCount >= 3 ? 'stabilized' : 'max attempts'} after ${attempts} checks`);
+                                }
+                            }, 200); // Check every 200ms
                         }, 100);
                     }
                 }
@@ -1357,13 +1594,13 @@
 
             // If video element changed, reattach listeners
             if (newVideoElement && newVideoElement !== currentVideoElement) {
-                if (DEBUG) console.log('[EYV DBG Video Observer] Video element replaced, reattaching listeners');
+                if (DEBUG) console.log('[EYV DBG Video Observer] Video element replaced (ad or quality change), reattaching listeners');
                 currentVideoElement = newVideoElement;
 
-                // Video element was replaced - listeners need to be reattached
+                // FIX: Video element was replaced - reattach listeners immediately
                 // This happens during ad insertion or quality changes
-                // The WeakSet check will fail for the new element, causing listeners to be reattached
-                // No action needed here - the next controls poll iteration will detect and reattach
+                const progressBar = playerElement.querySelector('.ytp-progress-bar-container');
+                attachVideoListeners(newVideoElement, progressBar);
             }
         };
 
@@ -1569,13 +1806,22 @@
     }
 
     // --- PICTURE-IN-PICTURE (PIP) LOGIC ---
-    function createPiPButtonLogic(videoElement) {
+    function createPiPButtonLogic(playerContainer) { // Changed argument to playerContainer
         const button = document.createElement('button');
         let isTransitioning = false;
 
         const pipClickHandler = async (event) => {
             event.stopPropagation();
             if (!document.pictureInPictureEnabled) return;
+
+            // FIX: Get the CURRENT video element dynamically at the moment of click
+            const currentVideo = playerContainer.querySelector('video.html5-main-video');
+
+            // FIX: Check if video exists and has loaded metadata
+            if (!currentVideo || currentVideo.readyState === 0) {
+                if (DEBUG) console.log('[EYV DBG] PiP request ignored: Video not ready.');
+                return;
+            }
 
             // Prevent rapid clicking during transitions
             if (isTransitioning) {
@@ -1586,14 +1832,15 @@
             isTransitioning = true;
             setTimeout(() => { isTransitioning = false; }, PIP_TRANSITION_MS);
             try {
-                if (videoElement !== document.pictureInPictureElement) {
+                if (currentVideo !== document.pictureInPictureElement) {
                     if (stickyButtonElement?.classList.contains('active')) {
                         wasStickyBeforePiP = true;
                         if (DEBUG) console.log("[EYV DBG] PiP requested while sticky active. Deactivating sticky.");
                         deactivateStickyModeInternal();
                         await new Promise(resolve => setTimeout(resolve, 50));
                     } else { wasStickyBeforePiP = false; }
-                    await videoElement.requestPictureInPicture();
+
+                    await currentVideo.requestPictureInPicture();
                 } else {
                     await document.exitPictureInPicture();
                 }
@@ -1710,6 +1957,15 @@
                 if (DEBUG) console.log(`[EYV DBG] Updated placeholder to ${newW}px x ${newH}px`);
             }
         }
+
+        // Force YouTube to acknowledge the new size immediately
+        // FIX: Use flag to prevent infinite resize loop
+        if (window.getComputedStyle(fixedPlayer).width === `${newW}px`) {
+            // Set flag to tell our listener to ignore this specific event
+            window.eyvIsDispatching = true;
+            window.dispatchEvent(new Event('resize', { bubbles: true }));
+            window.eyvIsDispatching = false;
+        }
     }
 
     // --- CSS INJECTION ---
@@ -1730,11 +1986,15 @@
                 background-color: var(--yt-spec-base-background, #0f0f0f);
                 box-sizing: border-box !important;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-                pointer-events: none !important;
+                pointer-events: none !important; /* Lets clicks pass through the wrapper */
             }
 
-            .eyv-player-fixed > div#movie_player,
-            .eyv-player-fixed > div.html5-video-player {
+            /* FIX: Removed '>' to select descendants, not just direct children */
+            /* FIX: Add #container and direct child div to the allow-list for click-through */
+            .eyv-player-fixed > div,
+            .eyv-player-fixed #container,
+            .eyv-player-fixed #movie_player,
+            .eyv-player-fixed .html5-video-player {
                 width: 100% !important;
                 height: 100% !important;
                 max-width: 100% !important;
@@ -1744,7 +2004,7 @@
                 bottom: auto !important;
                 right: auto !important;
                 transform: none !important;
-                pointer-events: auto !important;
+                pointer-events: auto !important; /* Re-enable clicks on the actual player */
             }
 
             .eyv-player-fixed .html5-video-container,

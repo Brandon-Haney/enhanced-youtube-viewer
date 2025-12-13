@@ -88,6 +88,8 @@
             wasStickyBeforeEnd = false;
             wasStickyDuringCurrentVideo = false;
             isInitializing = false;
+            originalPlayerParent = null;
+            originalPlayerNextSibling = null;
 
             // Cancel any pending RAF callbacks
             if (playerStateObserverRafId) {
@@ -149,6 +151,25 @@
                 const targetPlayer = fixedPlayer || playerElementRef;
 
                 if (targetPlayer && targetPlayer.isConnected) {
+                    // Restore player to original DOM position if it was moved to body
+                    if (originalPlayerParent && originalPlayerParent.isConnected) {
+                        if (originalPlayerNextSibling && originalPlayerNextSibling.isConnected) {
+                            originalPlayerParent.insertBefore(targetPlayer, originalPlayerNextSibling);
+                        } else {
+                            originalPlayerParent.appendChild(targetPlayer);
+                        }
+                        if (DEBUG) console.log('[EYV DBG] Restored player to original DOM position during cleanup');
+                    } else if (targetPlayer.parentElement === document.body) {
+                        // Fallback: find the player-container and move it back
+                        const playerContainer = document.querySelector('#player-container');
+                        if (playerContainer && playerContainer.isConnected) {
+                            playerContainer.appendChild(targetPlayer);
+                            if (DEBUG) console.log('[EYV DBG] Restored player to #player-container during cleanup');
+                        }
+                    }
+                    originalPlayerParent = null;
+                    originalPlayerNextSibling = null;
+
                     targetPlayer.classList.remove('eyv-player-fixed');
                     targetPlayer.style.removeProperty('width');
                     targetPlayer.style.removeProperty('height');
@@ -182,6 +203,14 @@
                 // Clean up sticky player from previous video to prevent interference
                 const stickyPlayer = document.querySelector('.eyv-player-fixed');
                 if (stickyPlayer) {
+                    // Restore player to original DOM position if it was moved to body
+                    if (stickyPlayer.parentElement === document.body) {
+                        const playerContainer = document.querySelector('#player-container');
+                        if (playerContainer && playerContainer.isConnected) {
+                            playerContainer.appendChild(stickyPlayer);
+                            if (DEBUG) console.log('[EYV DBG] Restored player to #player-container during nav-finish');
+                        }
+                    }
                     stickyPlayer.classList.remove('eyv-player-fixed');
                     Object.assign(stickyPlayer.style, {
                         width: '',
@@ -208,6 +237,13 @@
     const oldStyles = document.getElementById('eyv-styles'); if (oldStyles) { oldStyles.remove(); }
     const oldStickyPlayer = document.querySelector('.eyv-player-fixed');
     if (oldStickyPlayer) {
+        // Restore player to original DOM position if it was moved to body
+        if (oldStickyPlayer.parentElement === document.body) {
+            const playerContainer = document.querySelector('#player-container');
+            if (playerContainer && playerContainer.isConnected) {
+                playerContainer.appendChild(oldStickyPlayer);
+            }
+        }
         oldStickyPlayer.classList.remove('eyv-player-fixed');
         Object.assign(oldStickyPlayer.style, { width: '', height: '', left: '', transform: '', top: '' });
     }
@@ -256,6 +292,8 @@
     let activeSyncInterval = null; // Track active sync polling to prevent overlaps
     let playerStateObserverRafId = null; // Track RAF ID for playerStateObserver to cancel on cleanup
     let stickyResizeTimeout = null; // Track ResizeObserver debounce timeout for cleanup
+    let originalPlayerParent = null; // Store original parent before moving to body for sticky mode
+    let originalPlayerNextSibling = null; // Store next sibling for correct reinsertion when deactivating
 
     // FIX: Move buttonsToInsert to global scope so onMessage can update it dynamically
     const buttonsToInsert = { sticky: null, pip: null };
@@ -1069,8 +1107,20 @@
                 // Force a browser reflow/layout calc so the DOM updates immediately
                 void playerElementRef.offsetHeight;
 
-                // Clear flag after a short delay
-                setTimeout(() => { isResizingPlayer = false; }, 100);
+                // STEP 1b: Schedule additional recalculations to catch delayed YouTube layout updates
+                // YouTube's layout may not have fully updated by the time our first calculation runs
+                const recalcDelays = [150, 300, 500];
+                recalcDelays.forEach(delay => {
+                    setTimeout(() => {
+                        if (playerElementRef?.classList.contains('eyv-player-fixed')) {
+                            centerStickyPlayer(playerElementRef);
+                            syncButtonDimensions();
+                        }
+                    }, delay);
+                });
+
+                // Clear flag after all recalculations complete
+                setTimeout(() => { isResizingPlayer = false; }, 600);
             }
 
             // STEP 2: Sync our custom buttons
@@ -1101,6 +1151,18 @@
         if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
         if (DEBUG) console.log('[EYV DBG] Deactivating sticky mode.'); else console.log('[EYV] Deactivating sticky mode.');
         if (playerElementRef) {
+            // Restore player to original DOM position (moved to body during activation)
+            if (originalPlayerParent && originalPlayerParent.isConnected) {
+                if (originalPlayerNextSibling && originalPlayerNextSibling.isConnected) {
+                    originalPlayerParent.insertBefore(playerElementRef, originalPlayerNextSibling);
+                } else {
+                    originalPlayerParent.appendChild(playerElementRef);
+                }
+                if (DEBUG) console.log('[EYV DBG] Restored player to original DOM position');
+            }
+            originalPlayerParent = null;
+            originalPlayerNextSibling = null;
+
             // In theater mode with chat open, calculate and preserve dimensions to prevent player from expanding
             const watchFlexy = document.querySelector('ytd-watch-flexy');
             const isTheater = watchFlexy?.hasAttribute('theater');
@@ -1468,21 +1530,22 @@
                     const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--yt-spec-base-background');
                     playerPlaceholder.style.backgroundColor = sanitizeColorValue(bgColor);
                 }
+
+                // Store original DOM position before moving to body (fixes z-index stacking issues)
+                originalPlayerParent = playerElement.parentElement;
+                originalPlayerNextSibling = playerElement.nextSibling;
+
+                // Move player to document.body to escape ytd-app stacking context
+                // This ensures the fixed player appears above all YouTube content
+                document.body.appendChild(playerElement);
+                if (DEBUG) console.log('[EYV DBG] Moved player to document.body for proper z-index stacking');
+
                 playerElement.classList.add('eyv-player-fixed');
-                const isTheater = watchFlexy?.hasAttribute('theater');
-                // Re-use isYtFull already declared above
-                if (!isTheater && !isYtFull && !document.fullscreenElement) {
-                    // Default view - set player and placeholder to initial dimensions
-                    Object.assign(playerElement.style, { width: `${initialWidth}px`, height: `${initialHeight}px`, left: `${initialLeft}px`, top: `${initialTop}px`, transform: 'translateX(0%)' });
-                    if (playerPlaceholder?.isConnected) {
-                        playerPlaceholder.style.width = `${initialWidth}px`;
-                        playerPlaceholder.style.height = `${initialHeight}px`;
-                        playerPlaceholder.style.display = 'block';
-                    }
-                } else {
-                    // Theater/fullscreen - let centerStickyPlayer handle dimensions and placeholder
-                    centerStickyPlayer(playerElement);
-                }
+
+                // Always use centerStickyPlayer to calculate dimensions after moving to body
+                // This ensures proper sizing regardless of view mode (default, theater, fullscreen)
+                // centerStickyPlayer also handles placeholder dimensions correctly (with constraints)
+                centerStickyPlayer(playerElement);
                 // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
 
@@ -2012,8 +2075,8 @@
                 if (isFinite(maxWidth) && maxWidth > 0 && newW > maxWidth) {
                     if (DEBUG) console.log(`[EYV DBG] Limiting player width from ${newW}px to YouTube's max: ${maxWidth}px`);
                     newW = maxWidth;
-                    // Center the player horizontally when it hits max width
-                    newL = (window.innerWidth - newW) / 2;
+                    // Keep player aligned with primary column (don't center in default view)
+                    // newL stays as refRect.left
                 }
             }
         }
@@ -2028,16 +2091,17 @@
         if (newH > availableHeight) {
             if (DEBUG) console.log(`[EYV DBG] Limiting player height from ${newH}px to ${availableHeight}px to keep controls visible`);
             newH = availableHeight;
-            // Recalculate width based on constrained height to maintain aspect ratio
-            newW = newH / validAspectRatio;
-            // Center horizontally when width is constrained by height
-            // In theater/fullscreen, center within the available space
+
+            // In theater/fullscreen mode, keep full width to cover sidebar content
+            // The video element inside will maintain aspect ratio with letterboxing
             if (isTheater || isYtFull) {
-                const availableWidth = refRect.width;
-                newL = refRect.left + (availableWidth - newW) / 2;
-                if (DEBUG) console.log(`[EYV DBG] Centering player in theater/fullscreen: left=${newL}px (container: ${availableWidth}px, player: ${newW}px)`);
+                // Keep newW and newL as-is (full watchFlexy width)
+                if (DEBUG) console.log(`[EYV DBG] Theater/fullscreen: keeping full width ${newW}px, height constrained to ${newH}px`);
             } else {
-                newL = (window.innerWidth - newW) / 2;
+                // In default view, recalculate width to maintain aspect ratio
+                newW = newH / validAspectRatio;
+                // newL stays as refRect.left (aligned with primary column)
+                if (DEBUG) console.log(`[EYV DBG] Default view: width adjusted to ${newW}px to maintain aspect ratio`);
             }
         }
 
@@ -2071,6 +2135,24 @@
             window.dispatchEvent(new Event('resize', { bubbles: true }));
             window.eyvIsDispatching = false;
         }
+
+        // Force YouTube's internal video player to recalculate dimensions
+        // This addresses the issue where the outer container resizes but the video element doesn't
+        const moviePlayer = fixedPlayer.querySelector('#movie_player');
+        const videoElement = fixedPlayer.querySelector('video.html5-main-video');
+
+        if (moviePlayer) {
+            // Force reflow on movie_player to trigger layout recalculation
+            void moviePlayer.offsetHeight;
+
+            // Dispatch resize event on movie_player (non-bubbling to avoid interfering with clicks)
+            moviePlayer.dispatchEvent(new Event('resize', { bubbles: false }));
+        }
+
+        if (videoElement) {
+            // Force the video element to recalculate
+            void videoElement.offsetHeight;
+        }
     }
 
     // --- CSS INJECTION ---
@@ -2079,10 +2161,9 @@
         const style = document.createElement('style');
         style.id = 'eyv-styles';
 
-        // Calculate appropriate z-index - should be above main content but below YouTube's sidebar drawer
-        // YouTube's sidebar drawer (tp-yt-app-drawer) has z-index 2030
-        // Setting sticky player to 2020 ensures it appears above content but below sidebar/modals
-        const zIndex = 2020;
+        // z-index for sticky player - player is moved to document.body to escape ytd-app stacking context
+        // 9999 ensures it appears above all YouTube content while still being below critical browser UI
+        const zIndex = 9999;
 
         style.textContent = `
             .eyv-player-fixed {

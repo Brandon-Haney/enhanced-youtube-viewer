@@ -176,7 +176,28 @@
                     targetPlayer.style.removeProperty('left');
                     targetPlayer.style.removeProperty('top');
                     targetPlayer.style.removeProperty('transform');
-                    if (DEBUG) console.log('[EYV DBG] Cleared sticky styles from player');
+
+                    // Also clear styles on internal elements that may have been affected
+                    const moviePlayer = targetPlayer.querySelector('#movie_player');
+                    const videoElement = targetPlayer.querySelector('video.html5-main-video');
+                    const videoContainer = targetPlayer.querySelector('.html5-video-container');
+
+                    if (moviePlayer) {
+                        moviePlayer.style.removeProperty('width');
+                        moviePlayer.style.removeProperty('height');
+                    }
+                    if (videoElement) {
+                        videoElement.style.removeProperty('width');
+                        videoElement.style.removeProperty('height');
+                        videoElement.style.removeProperty('left');
+                        videoElement.style.removeProperty('top');
+                    }
+                    if (videoContainer) {
+                        videoContainer.style.removeProperty('width');
+                        videoContainer.style.removeProperty('height');
+                    }
+
+                    if (DEBUG) console.log('[EYV DBG] Cleared sticky styles from player and internal elements');
                 }
 
                 const placeholder = document.getElementById('eyv-player-placeholder');
@@ -184,6 +205,32 @@
             } else {
                 if (DEBUG) console.log('[EYV DBG] Sticky mode not active, skipping cleanup');
             }
+
+            // ALWAYS clean up video element styles on navigation, regardless of sticky state
+            // This prevents the black screen issue where video has stale positioning
+            const allVideoElements = document.querySelectorAll('video.html5-main-video');
+            allVideoElements.forEach(video => {
+                video.style.removeProperty('width');
+                video.style.removeProperty('height');
+                video.style.removeProperty('left');
+                video.style.removeProperty('top');
+                video.style.removeProperty('transform');
+                // Also try setting to empty string as fallback
+                video.style.width = '';
+                video.style.height = '';
+                video.style.left = '';
+                video.style.top = '';
+            });
+
+            const allVideoContainers = document.querySelectorAll('.html5-video-container');
+            allVideoContainers.forEach(container => {
+                container.style.removeProperty('width');
+                container.style.removeProperty('height');
+                container.style.width = '';
+                container.style.height = '';
+            });
+
+            if (DEBUG) console.log('[EYV DBG] Cleared all video element styles on navigation');
 
             cleanupRegistry.cleanup();
             // Reset initialization guard so we can reinitialize after navigation
@@ -196,6 +243,23 @@
     window.addEventListener('yt-navigate-finish', () => {
         try {
             if (DEBUG) console.log('[EYV DBG] YouTube navigation finished, checking if reinitialization needed...');
+
+            // ALWAYS clean up stale video styles on navigation finish (regardless of page type)
+            // This catches cases where we navigate away from a watch page to search/home
+            const allVideoElements = document.querySelectorAll('video.html5-main-video');
+            allVideoElements.forEach(video => {
+                // Only clear if video has suspicious positioning (like negative top)
+                const top = parseInt(video.style.top, 10);
+                if (top < 0 || video.style.top === '-809px' || video.style.top) {
+                    video.style.width = '';
+                    video.style.height = '';
+                    video.style.left = '';
+                    video.style.top = '';
+                    video.style.transform = '';
+                    if (DEBUG) console.log('[EYV DBG] Cleared stale video styles on nav-finish');
+                }
+            });
+
             // Only reinitialize if we're on a watch page
             if (window.location.pathname === '/watch' && !window.eyvHasRun) {
                 if (DEBUG) console.log('[EYV DBG] On watch page, reinitializing...');
@@ -221,6 +285,26 @@
                         position: '',
                         zIndex: ''
                     });
+
+                    // Also clear styles on internal elements
+                    const moviePlayer = stickyPlayer.querySelector('#movie_player');
+                    const videoElement = stickyPlayer.querySelector('video.html5-main-video');
+                    const videoContainer = stickyPlayer.querySelector('.html5-video-container');
+
+                    if (moviePlayer) {
+                        moviePlayer.style.width = '';
+                        moviePlayer.style.height = '';
+                    }
+                    if (videoElement) {
+                        videoElement.style.width = '';
+                        videoElement.style.height = '';
+                        videoElement.style.left = '';
+                        videoElement.style.top = '';
+                    }
+                    if (videoContainer) {
+                        videoContainer.style.width = '';
+                        videoContainer.style.height = '';
+                    }
                 }
 
                 // Re-run the initialization by resetting the guard and starting the poller
@@ -235,9 +319,23 @@
     // --- CLEANUP OF PREVIOUS INSTANCES ---
     document.querySelectorAll('.eyv-player-button, .eyv-pip-button').forEach(btn => btn.remove());
     const oldStyles = document.getElementById('eyv-styles'); if (oldStyles) { oldStyles.remove(); }
+
+    // Check for player directly in body (our DOM relocation) - must clean this up
+    const playerInBody = document.body.querySelector(':scope > ytd-player');
+    if (playerInBody) {
+        console.log('[EYV] Found ytd-player in body, cleaning up...');
+        const playerContainer = document.querySelector('#player-container');
+        if (playerContainer && playerContainer.isConnected) {
+            playerContainer.appendChild(playerInBody);
+            console.log('[EYV] Moved ytd-player back to #player-container');
+        }
+        playerInBody.classList.remove('eyv-player-fixed');
+        Object.assign(playerInBody.style, { width: '', height: '', left: '', transform: '', top: '', position: '', zIndex: '' });
+    }
+
+    // Also check by class (fallback)
     const oldStickyPlayer = document.querySelector('.eyv-player-fixed');
-    if (oldStickyPlayer) {
-        // Restore player to original DOM position if it was moved to body
+    if (oldStickyPlayer && oldStickyPlayer !== playerInBody) {
         if (oldStickyPlayer.parentElement === document.body) {
             const playerContainer = document.querySelector('#player-container');
             if (playerContainer && playerContainer.isConnected) {
@@ -247,6 +345,85 @@
         oldStickyPlayer.classList.remove('eyv-player-fixed');
         Object.assign(oldStickyPlayer.style, { width: '', height: '', left: '', transform: '', top: '' });
     }
+
+    // ALWAYS clean up ALL video elements on script load (catches back button navigation)
+    // This prevents the black screen issue where video retains stale positioning
+    const allVideos = document.querySelectorAll('video.html5-main-video');
+    const allContainers = document.querySelectorAll('.html5-video-container');
+    const allMoviePlayers = document.querySelectorAll('#movie_player');
+
+    allVideos.forEach(video => {
+        video.style.width = '';
+        video.style.height = '';
+        video.style.left = '';
+        video.style.top = '';
+        video.style.transform = '';
+    });
+    allContainers.forEach(container => {
+        container.style.width = '';
+        container.style.height = '';
+    });
+    allMoviePlayers.forEach(mp => {
+        mp.style.width = '';
+        mp.style.height = '';
+    });
+
+    if (allVideos.length > 0) {
+        console.log(`[EYV] Cleaned up ${allVideos.length} video element(s) on script load`);
+    }
+
+    // Set up a temporary MutationObserver to catch video elements with stale styles
+    // Player cleanup is handled by delayed checks below (more reliable)
+    const staleElementCleanupObserver = new MutationObserver((mutations) => {
+        const videos = document.querySelectorAll('video.html5-main-video');
+        videos.forEach(video => {
+            const top = parseInt(video.style.top, 10);
+            if (top < 0) {
+                video.style.width = '';
+                video.style.height = '';
+                video.style.left = '';
+                video.style.top = '';
+                video.style.transform = '';
+                console.log('[EYV] Cleaned stale video styles via MutationObserver');
+            }
+        });
+    });
+
+    // Only observe if we're NOT on a watch page (search, home, etc.)
+    if (window.location.pathname !== '/watch') {
+        staleElementCleanupObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+        // Also run cleanup checks with delays to catch elements already present
+        // (MutationObserver only fires on changes, not existing elements)
+        const runCleanupCheck = () => {
+            const playerInBody = document.body.querySelector(':scope > ytd-player');
+            if (playerInBody) {
+                console.log('[EYV] Delayed check: Found ytd-player in body, cleaning up...');
+                playerInBody.classList.remove('eyv-player-fixed');
+                playerInBody.style.display = 'none';
+                Object.assign(playerInBody.style, { width: '', height: '', left: '', transform: '', top: '', position: '', zIndex: '' });
+                // Try to move it back if container exists
+                const playerContainer = document.querySelector('ytd-watch-flexy #player-container');
+                if (playerContainer && playerContainer.isConnected) {
+                    playerContainer.appendChild(playerInBody);
+                    playerInBody.style.display = '';
+                    console.log('[EYV] Delayed check: Moved ytd-player back to container');
+                }
+            }
+        };
+
+        // Run checks at various delays
+        setTimeout(runCleanupCheck, 100);
+        setTimeout(runCleanupCheck, 500);
+        setTimeout(runCleanupCheck, 1000);
+        setTimeout(runCleanupCheck, 2000);
+
+        // Disconnect observer after 5 seconds
+        setTimeout(() => {
+            staleElementCleanupObserver.disconnect();
+        }, 5000);
+    }
+
     const oldPlaceholder = document.getElementById('eyv-player-placeholder'); if (oldPlaceholder) { oldPlaceholder.remove(); }
 
     if (DEBUG) console.log("[EYV DBG] Content script executing (guard passed, cleanup done)."); else console.log("[EYV] Content script executing.");
@@ -2251,9 +2428,23 @@
                 display: block !important;
             }
 
-            .eyv-player-button.active, 
-            .eyv-pip-button.active { 
+            .eyv-player-button.active,
+            .eyv-pip-button.active {
                 opacity: 1 !important;
+            }
+
+            /* Ensure YouTube popups/dialogs appear above sticky player */
+            ytd-popup-container,
+            tp-yt-paper-dialog,
+            tp-yt-iron-dropdown,
+            ytd-menu-popup-renderer,
+            ytd-unified-share-panel-renderer,
+            ytd-add-to-playlist-renderer,
+            ytd-modal-with-title-and-button-renderer,
+            yt-dropdown-menu,
+            iron-dropdown,
+            paper-dialog {
+                z-index: 10000 !important;
             }
         `;
         document.head.append(style);

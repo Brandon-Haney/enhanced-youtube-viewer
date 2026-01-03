@@ -331,30 +331,32 @@
         Object.assign(oldStickyPlayer.style, { width: '', height: '', left: '', transform: '', top: '' });
     }
 
-    // ALWAYS clean up ALL video elements on script load (catches back button navigation)
-    // This prevents the black screen issue where video retains stale positioning
-    const allVideos = document.querySelectorAll('video.html5-main-video');
-    const allContainers = document.querySelectorAll('.html5-video-container');
-    const allMoviePlayers = document.querySelectorAll('#movie_player');
+    // Only clean up video elements on watch pages (prevents breaking Shorts and other pages)
+    // This catches back button navigation from sticky mode
+    if (window.location.pathname === '/watch') {
+        const allVideos = document.querySelectorAll('video.html5-main-video');
+        const allContainers = document.querySelectorAll('.html5-video-container');
+        const allMoviePlayers = document.querySelectorAll('#movie_player');
 
-    allVideos.forEach(video => {
-        video.style.width = '';
-        video.style.height = '';
-        video.style.left = '';
-        video.style.top = '';
-        video.style.transform = '';
-    });
-    allContainers.forEach(container => {
-        container.style.width = '';
-        container.style.height = '';
-    });
-    allMoviePlayers.forEach(mp => {
-        mp.style.width = '';
-        mp.style.height = '';
-    });
+        allVideos.forEach(video => {
+            video.style.width = '';
+            video.style.height = '';
+            video.style.left = '';
+            video.style.top = '';
+            video.style.transform = '';
+        });
+        allContainers.forEach(container => {
+            container.style.width = '';
+            container.style.height = '';
+        });
+        allMoviePlayers.forEach(mp => {
+            mp.style.width = '';
+            mp.style.height = '';
+        });
 
-    if (allVideos.length > 0) {
-        console.log(`[EYV] Cleaned up ${allVideos.length} video element(s) on script load`);
+        if (allVideos.length > 0) {
+            console.log(`[EYV] Cleaned up ${allVideos.length} video element(s) on script load`);
+        }
     }
 
     // Set up a temporary MutationObserver to catch video elements with stale styles
@@ -374,8 +376,9 @@
         });
     });
 
-    // Only observe if we're NOT on a watch page (search, home, etc.)
-    if (window.location.pathname !== '/watch') {
+    // Only observe if we're NOT on a watch page and NOT on Shorts
+    // This cleanup logic is only needed for pages that might have stale sticky player state
+    if (window.location.pathname !== '/watch' && !window.location.pathname.startsWith('/shorts')) {
         staleElementCleanupObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
 
         // Also run cleanup checks with delays to catch elements already present

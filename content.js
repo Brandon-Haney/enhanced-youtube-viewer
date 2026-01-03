@@ -2421,7 +2421,7 @@
                 opacity: 1 !important;
             }
 
-            /* Ensure YouTube popups/dialogs appear above sticky player */
+            /* Ensure YouTube popups/dialogs/sidebar appear above sticky player */
             ytd-popup-container,
             tp-yt-paper-dialog,
             tp-yt-iron-dropdown,
@@ -2431,7 +2431,11 @@
             ytd-modal-with-title-and-button-renderer,
             yt-dropdown-menu,
             iron-dropdown,
-            paper-dialog {
+            paper-dialog,
+            tp-yt-app-drawer,
+            #guide,
+            #guide-inner-content,
+            ytd-guide-renderer {
                 z-index: 10000 !important;
             }
         `;

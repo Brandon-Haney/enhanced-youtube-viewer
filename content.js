@@ -206,31 +206,32 @@
                 if (DEBUG) console.log('[EYV DBG] Sticky mode not active, skipping cleanup');
             }
 
-            // ALWAYS clean up video element styles on navigation, regardless of sticky state
-            // This prevents the black screen issue where video has stale positioning
-            const allVideoElements = document.querySelectorAll('video.html5-main-video');
-            allVideoElements.forEach(video => {
-                video.style.removeProperty('width');
-                video.style.removeProperty('height');
-                video.style.removeProperty('left');
-                video.style.removeProperty('top');
-                video.style.removeProperty('transform');
-                // Also try setting to empty string as fallback
-                video.style.width = '';
-                video.style.height = '';
-                video.style.left = '';
-                video.style.top = '';
-            });
+            // Only clean up video element styles when navigating FROM a watch page
+            // This prevents breaking Shorts and other YouTube pages that use different video players
+            if (window.location.pathname === '/watch') {
+                const allVideoElements = document.querySelectorAll('video.html5-main-video');
+                allVideoElements.forEach(video => {
+                    video.style.removeProperty('width');
+                    video.style.removeProperty('height');
+                    video.style.removeProperty('left');
+                    video.style.removeProperty('top');
+                    video.style.removeProperty('transform');
+                    video.style.width = '';
+                    video.style.height = '';
+                    video.style.left = '';
+                    video.style.top = '';
+                });
 
-            const allVideoContainers = document.querySelectorAll('.html5-video-container');
-            allVideoContainers.forEach(container => {
-                container.style.removeProperty('width');
-                container.style.removeProperty('height');
-                container.style.width = '';
-                container.style.height = '';
-            });
+                const allVideoContainers = document.querySelectorAll('.html5-video-container');
+                allVideoContainers.forEach(container => {
+                    container.style.removeProperty('width');
+                    container.style.removeProperty('height');
+                    container.style.width = '';
+                    container.style.height = '';
+                });
 
-            if (DEBUG) console.log('[EYV DBG] Cleared all video element styles on navigation');
+                if (DEBUG) console.log('[EYV DBG] Cleared all video element styles on navigation from watch page');
+            }
 
             cleanupRegistry.cleanup();
             // Reset initialization guard so we can reinitialize after navigation
@@ -243,22 +244,6 @@
     window.addEventListener('yt-navigate-finish', () => {
         try {
             if (DEBUG) console.log('[EYV DBG] YouTube navigation finished, checking if reinitialization needed...');
-
-            // ALWAYS clean up stale video styles on navigation finish (regardless of page type)
-            // This catches cases where we navigate away from a watch page to search/home
-            const allVideoElements = document.querySelectorAll('video.html5-main-video');
-            allVideoElements.forEach(video => {
-                // Only clear if video has suspicious positioning (like negative top)
-                const top = parseInt(video.style.top, 10);
-                if (top < 0 || video.style.top === '-809px' || video.style.top) {
-                    video.style.width = '';
-                    video.style.height = '';
-                    video.style.left = '';
-                    video.style.top = '';
-                    video.style.transform = '';
-                    if (DEBUG) console.log('[EYV DBG] Cleared stale video styles on nav-finish');
-                }
-            });
 
             // Only reinitialize if we're on a watch page
             if (window.location.pathname === '/watch' && !window.eyvHasRun) {

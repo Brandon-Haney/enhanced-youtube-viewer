@@ -103,6 +103,10 @@
                 stickyResizeTimeout = null;
             }
 
+            // Clear delayed resize recalculation timeouts
+            delayedRecalcTimeouts.forEach(id => clearTimeout(id));
+            delayedRecalcTimeouts = [];
+
             // Null interval variables to prevent memory leaks
             mainPollInterval = null;
             playerStateObserver = null;
@@ -449,7 +453,7 @@
     let wasStickyBeforeEnd = false; // Track if sticky was active when video ended
     let wasStickyDuringCurrentVideo = false; // Track if sticky was EVER active during current video playback
     let isAutoPauseResumeActive = false; // Flag to prevent interference with user pause/play
-    let isResizingPlayer = false; // Flag to prevent resize event loops
+    let delayedRecalcTimeouts = []; // Track delayed resize recalculation timeouts for cancellation
     let cachedButtonWidth = null; // Cached button dimensions for dynamic insertion
     let cachedButtonHeight = null;
     let lastSyncedWidth = null; // Track last synced dimensions to detect changes
@@ -1252,52 +1256,37 @@
 
         // Register window and document event listeners (debounce resize for performance)
         const debouncedResize = debounce(() => {
-            // Prevent infinite loop from centerStickyPlayer dispatching resize events
-            if (isResizingPlayer) {
-                if (DEBUG) console.log('[EYV DBG] Already resizing, ignoring nested resize event');
-                return;
-            }
-
             if (DEBUG) console.log('[EYV DBG] ========== WINDOW RESIZE EVENT FIRED ==========');
 
-            // STEP 1: Resize the player container FIRST
+            // Resize the sticky player container
             if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                // Set flag to prevent infinite loop
-                isResizingPlayer = true;
-
-                // We run this synchronously (no requestAnimationFrame) to ensure
+                // Run synchronously (no requestAnimationFrame) to ensure
                 // styles are set before we ask YouTube to recalculate
                 centerStickyPlayer(playerElementRef);
 
                 // Force a browser reflow/layout calc so the DOM updates immediately
                 void playerElementRef.offsetHeight;
 
-                // STEP 1b: Schedule additional recalculations to catch delayed YouTube layout updates
+                // Cancel previous delayed recalculations before scheduling new ones
+                delayedRecalcTimeouts.forEach(id => clearTimeout(id));
+                delayedRecalcTimeouts = [];
+
+                // Schedule additional recalculations to catch delayed YouTube layout updates
                 // YouTube's layout may not have fully updated by the time our first calculation runs
-                const recalcDelays = [150, 300, 500];
+                const recalcDelays = [150, 300];
                 recalcDelays.forEach(delay => {
-                    setTimeout(() => {
+                    const id = setTimeout(() => {
                         if (playerElementRef?.classList.contains('eyv-player-fixed')) {
                             centerStickyPlayer(playerElementRef);
                             syncButtonDimensions();
                         }
                     }, delay);
+                    delayedRecalcTimeouts.push(id);
                 });
-
-                // Clear flag after all recalculations complete
-                setTimeout(() => { isResizingPlayer = false; }, 600);
             }
 
-            // STEP 2: Sync our custom buttons
+            // Sync our custom buttons
             syncButtonDimensions();
-
-            // STEP 3: Dispatch resize event to update YouTube OSD
-            if (DEBUG) console.log('[EYV DBG] Dispatching resize event to update OSD');
-
-            // CRITICAL FIX: Wrap this dispatch in the flag to prevent infinite loops
-            window.eyvIsDispatching = true;
-            window.dispatchEvent(new Event('resize', { bubbles: true }));
-            window.eyvIsDispatching = false;
 
         }, RESIZE_DEBOUNCE_MS);
 
@@ -1731,8 +1720,6 @@
                                     syncButtonDimensions();
                                 });
                             }, 100); // Wait 100ms after last resize before recalculating
-                            // Register timeout for cleanup
-                            cleanupRegistry.addTimeout(stickyResizeTimeout);
                         }
                     });
 
@@ -2293,13 +2280,10 @@
         }
 
         // Force YouTube to acknowledge the new size immediately
-        // FIX: Use flag to prevent infinite resize loop
-        if (window.getComputedStyle(fixedPlayer).width === `${newW}px`) {
-            // Set flag to tell our listener to ignore this specific event
-            window.eyvIsDispatching = true;
-            window.dispatchEvent(new Event('resize', { bubbles: true }));
-            window.eyvIsDispatching = false;
-        }
+        // Set flag to tell our resize listener to ignore this dispatch (prevents infinite loops)
+        window.eyvIsDispatching = true;
+        window.dispatchEvent(new Event('resize', { bubbles: true }));
+        window.eyvIsDispatching = false;
 
         // Force YouTube's internal video player to recalculate dimensions
         // This addresses the issue where the outer container resizes but the video element doesn't

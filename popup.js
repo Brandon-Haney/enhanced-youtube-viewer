@@ -86,7 +86,7 @@ document.addEventListener('DOMContentLoaded', function() {
             versionText.textContent = `v${version} • Active on YouTube`;
         } catch (error) {
             console.error('[EYV Popup] Failed to get manifest version:', error);
-            versionText.textContent = 'v1.4 • Active on YouTube';
+            versionText.textContent = 'Active on YouTube';
         }
     }
 

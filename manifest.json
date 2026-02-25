@@ -5,7 +5,8 @@
   "description": "Enhances YouTube with sticky player, PiP, and more.",
   "permissions": [
     "activeTab",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "*://*.youtube.com/*"
@@ -14,6 +15,9 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {

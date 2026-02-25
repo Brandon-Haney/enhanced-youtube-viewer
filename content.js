@@ -97,10 +97,14 @@
                 playerStateObserverRafId = null;
             }
 
-            // Clear sticky resize timeout
-            if (stickyResizeTimeout) {
-                clearTimeout(stickyResizeTimeout);
-                stickyResizeTimeout = null;
+            // Clear sticky resize rAF IDs
+            if (stickyResizeRafId) {
+                cancelAnimationFrame(stickyResizeRafId);
+                stickyResizeRafId = null;
+            }
+            if (resizeRafId) {
+                cancelAnimationFrame(resizeRafId);
+                resizeRafId = null;
             }
 
             // Clear delayed resize recalculation timeouts
@@ -383,7 +387,7 @@
     // Only observe if we're NOT on a watch page and NOT on Shorts
     // This cleanup logic is only needed for pages that might have stale sticky player state
     if (window.location.pathname !== '/watch' && !window.location.pathname.startsWith('/shorts')) {
-        staleElementCleanupObserver.observe(document.body, { childList: true, subtree: true, attributes: true });
+        staleElementCleanupObserver.observe(document.body, { childList: true, subtree: true });
 
         // Also run cleanup checks with delays to catch elements already present
         // (MutationObserver only fires on changes, not existing elements)
@@ -425,14 +429,11 @@
     const MAX_POLL_ATTEMPTS = 40; // Give up after 20 seconds (40 * 500ms)
     const CONTROLS_POLL_INTERVAL_MS = 500; // Check for player controls every 500ms
     const MAX_CONTROLS_POLL_ATTEMPTS = 30; // Give up after 15 seconds
-    const RESIZE_DEBOUNCE_MS = 100; // Debounce window resize events
-    const STORAGE_WRITE_DEBOUNCE_MS = 150; // Debounce storage writes in popup
     const BUTTON_TRANSITION_MS = 300; // Prevent rapid sticky button clicks
     const PIP_TRANSITION_MS = 500; // Prevent rapid PiP button clicks
 
     // --- GLOBAL VARIABLES & STATE ---
     let attempts = 0;
-    const maxAttempts = MAX_POLL_ATTEMPTS;
     let mainPollInterval;
     let playerPlaceholder = null;
     let originalPlayerAspectRatio = 16 / 9;
@@ -460,7 +461,8 @@
     let lastSyncedHeight = null;
     let activeSyncInterval = null; // Track active sync polling to prevent overlaps
     let playerStateObserverRafId = null; // Track RAF ID for playerStateObserver to cancel on cleanup
-    let stickyResizeTimeout = null; // Track ResizeObserver debounce timeout for cleanup
+    let stickyResizeRafId = null; // Track ResizeObserver rAF ID for cleanup
+    let resizeRafId = null; // Track window resize rAF ID for cleanup
     let originalPlayerParent = null; // Store original parent before moving to body for sticky mode
     let originalPlayerNextSibling = null; // Store next sibling for correct reinsertion when deactivating
 
@@ -763,18 +765,6 @@
     const pipSVGActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g fill="var(--yt-spec-static-brand-red, #FF0000)"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></g></svg>`;
 
     // --- UTILITY FUNCTIONS ---
-    function debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
     function getMastheadOffset() {
         const masthead = document.querySelector('#masthead-container ytd-masthead') || document.querySelector('#masthead-container');
         if (masthead?.offsetHeight > 0) return masthead.offsetHeight;
@@ -890,7 +880,7 @@
                 clearInterval(mainPollInterval);
                 isInitializing = false;
                 initializeFeatures(playerElement);
-            } else if (attempts >= maxAttempts) {
+            } else if (attempts >= MAX_POLL_ATTEMPTS) {
                 clearInterval(mainPollInterval);
                 isInitializing = false;
                 console.warn("[EYV] FAILED: Could not find player element.");
@@ -1204,7 +1194,6 @@
             if (DEBUG) console.log('[EYV DBG] Controls not yet loaded, setting up MutationObserver...');
 
             let controlsObserverAttempts = 0;
-            const maxAttempts = MAX_CONTROLS_POLL_ATTEMPTS;
 
             const controlsObserver = new MutationObserver(() => {
                 controlsObserverAttempts++;
@@ -1218,7 +1207,7 @@
                 if (playerRightControls && videoElement && progressBar) {
                     controlsObserver.disconnect();
                     initializeControls();
-                } else if (controlsObserverAttempts >= maxAttempts) {
+                } else if (controlsObserverAttempts >= MAX_CONTROLS_POLL_ATTEMPTS) {
                     controlsObserver.disconnect();
                     console.warn('[EYV] Failed to find player controls/video/progress bar after waiting.');
                 }
@@ -1254,47 +1243,38 @@
             }
         }
 
-        // Register window and document event listeners (debounce resize for performance)
-        const debouncedResize = debounce(() => {
-            if (DEBUG) console.log('[EYV DBG] ========== WINDOW RESIZE EVENT FIRED ==========');
+        // Register window and document event listeners (rAF-throttled for smooth 60fps updates)
+        const resizeHandler = (e) => {
+            // Stop the infinite loop: if we caused this resize event, ignore it
+            if (window.eyvIsDispatching) return;
+            // Throttle to one recalculation per animation frame (~16ms) instead of debouncing
+            // This gives smooth visual updates during continuous window dragging
+            if (resizeRafId) return;
+            resizeRafId = requestAnimationFrame(() => {
+                resizeRafId = null;
+                if (DEBUG) console.log('[EYV DBG] ========== WINDOW RESIZE EVENT FIRED ==========');
 
-            // Resize the sticky player container
-            if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                // Run synchronously (no requestAnimationFrame) to ensure
-                // styles are set before we ask YouTube to recalculate
-                centerStickyPlayer(playerElementRef);
+                // Resize the sticky player container
+                if (playerElementRef?.classList.contains('eyv-player-fixed')) {
+                    centerStickyPlayer(playerElementRef);
 
-                // Force a browser reflow/layout calc so the DOM updates immediately
-                void playerElementRef.offsetHeight;
+                    // Cancel previous delayed recalculations before scheduling new ones
+                    delayedRecalcTimeouts.forEach(id => clearTimeout(id));
+                    delayedRecalcTimeouts = [];
 
-                // Cancel previous delayed recalculations before scheduling new ones
-                delayedRecalcTimeouts.forEach(id => clearTimeout(id));
-                delayedRecalcTimeouts = [];
-
-                // Schedule additional recalculations to catch delayed YouTube layout updates
-                // YouTube's layout may not have fully updated by the time our first calculation runs
-                const recalcDelays = [150, 300];
-                recalcDelays.forEach(delay => {
+                    // Schedule one delayed recalculation to catch YouTube layout settling
                     const id = setTimeout(() => {
                         if (playerElementRef?.classList.contains('eyv-player-fixed')) {
                             centerStickyPlayer(playerElementRef);
                             syncButtonDimensions();
                         }
-                    }, delay);
+                    }, 150);
                     delayedRecalcTimeouts.push(id);
-                });
-            }
+                }
 
-            // Sync our custom buttons
-            syncButtonDimensions();
-
-        }, RESIZE_DEBOUNCE_MS);
-
-        // FIX: Wrapped handler to prevent infinite loops from our own dispatchEvent calls
-        const resizeHandler = (e) => {
-            // Stop the infinite loop: if we caused this resize event, ignore it
-            if (window.eyvIsDispatching) return;
-            debouncedResize();
+                // Sync our custom buttons
+                syncButtonDimensions();
+            });
         };
         cleanupRegistry.addListener(window, 'resize', resizeHandler);
         cleanupRegistry.addListener(document, 'fullscreenchange', handleFullscreenChange);
@@ -1711,15 +1691,13 @@
                 if (!stickyResizeObserver) {
                     stickyResizeObserver = new ResizeObserver(() => {
                         if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                            // Debounce resize events to prevent constant recalculation that blocks clicks
-                            if (stickyResizeTimeout) clearTimeout(stickyResizeTimeout);
-                            stickyResizeTimeout = setTimeout(() => {
-                                requestAnimationFrame(() => {
-                                    centerStickyPlayer(playerElementRef);
-                                    // Sync button dimensions when player resizes
-                                    syncButtonDimensions();
-                                });
-                            }, 100); // Wait 100ms after last resize before recalculating
+                            // Throttle to one recalculation per animation frame for smooth resizing
+                            if (stickyResizeRafId) return;
+                            stickyResizeRafId = requestAnimationFrame(() => {
+                                stickyResizeRafId = null;
+                                centerStickyPlayer(playerElementRef);
+                                syncButtonDimensions();
+                            });
                         }
                     });
 
@@ -1804,12 +1782,8 @@
                         if (DEBUG) console.log("[EYV DBG MO] Theater mode toggled (watch-flexy).");
                         // Dispatch resize event to trigger YouTube's OSD recalculation
                         setTimeout(() => {
-                            if (!window.eyvResizing) {
-                                window.eyvResizing = true;
-                                window.dispatchEvent(new Event('resize'));
-                                if (DEBUG) console.log('[EYV DBG] Dispatched resize event for theater mode toggle');
-                                setTimeout(() => { window.eyvResizing = false; }, 50);
-                            }
+                            window.dispatchEvent(new Event('resize'));
+                            if (DEBUG) console.log('[EYV DBG] Dispatched resize event for theater mode toggle');
 
                             // Clear any existing polling interval to prevent overlaps
                             if (activeSyncInterval) {
@@ -1999,13 +1973,21 @@
                                     video.pause();
                                     const resumeTimeout = setTimeout(() => {
                                         video.play().catch(err => {
-                                            if (DEBUG) console.log('[EYV DBG] Auto-resume blocked:', err.name);
+                                            console.warn('[EYV] Auto-resume failed:', err.name, '- retrying');
+                                            // Retry once after a brief delay in case the error was transient
+                                            const retryTimeout = setTimeout(() => {
+                                                video.play().catch(() => {
+                                                    console.warn('[EYV] Auto-resume retry failed, video may remain paused');
+                                                });
+                                            }, 100);
+                                            pendingChatToggleTimeouts.push(retryTimeout);
+                                            cleanupRegistry.addTimeout(retryTimeout);
                                         }).finally(() => {
                                             // Clear flag after play attempt completes
                                             const clearFlagTimeout = setTimeout(() => {
                                                 isAutoPauseResumeActive = false;
                                                 if (DEBUG) console.log('[EYV DBG] Auto pause/resume complete');
-                                            }, 50);
+                                            }, 150);
                                             pendingChatToggleTimeouts.push(clearFlagTimeout);
                                             cleanupRegistry.addTimeout(clearFlagTimeout);
                                         });
@@ -2291,6 +2273,17 @@
         const videoElement = fixedPlayer.querySelector('video.html5-main-video');
 
         if (moviePlayer) {
+            // Use YouTube's internal player API to trigger a proper size recalculation
+            // This is the same mechanism YouTube uses when pausing triggers a correct resize
+            if (typeof moviePlayer.setSize === 'function') {
+                try {
+                    moviePlayer.setSize(newW, newH);
+                    if (DEBUG) console.log(`[EYV DBG] Called moviePlayer.setSize(${newW}, ${newH})`);
+                } catch(e) {
+                    if (DEBUG) console.log('[EYV DBG] moviePlayer.setSize failed:', e);
+                }
+            }
+
             // Force reflow on movie_player to trigger layout recalculation
             void moviePlayer.offsetHeight;
 
@@ -2302,6 +2295,22 @@
             // Force the video element to recalculate
             void videoElement.offsetHeight;
         }
+
+        // Schedule a post-frame cleanup to override any YouTube-set inline dimensions
+        // YouTube's own resize handler may run after ours and set stale pixel values
+        requestAnimationFrame(() => {
+            if (!fixedPlayer?.classList.contains('eyv-player-fixed')) return;
+            const vc = fixedPlayer.querySelector('.html5-video-container');
+            const ve = fixedPlayer.querySelector('video.html5-main-video');
+            if (vc) {
+                vc.style.setProperty('width', '100%', 'important');
+                vc.style.setProperty('height', '100%', 'important');
+            }
+            if (ve) {
+                ve.style.setProperty('width', '100%', 'important');
+                ve.style.setProperty('height', '100%', 'important');
+            }
+        });
     }
 
     // --- CSS INJECTION ---

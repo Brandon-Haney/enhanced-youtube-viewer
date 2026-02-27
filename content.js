@@ -1254,9 +1254,9 @@
                 resizeRafId = null;
                 if (DEBUG) console.log('[EYV DBG] ========== WINDOW RESIZE EVENT FIRED ==========');
 
-                // Resize the sticky player container
+                // Resize the sticky player container (skip YouTube sync during continuous resize)
                 if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                    centerStickyPlayer(playerElementRef);
+                    centerStickyPlayer(playerElementRef, true);
 
                     // Cancel previous delayed recalculations before scheduling new ones
                     delayedRecalcTimeouts.forEach(id => clearTimeout(id));
@@ -1695,7 +1695,7 @@
                             if (stickyResizeRafId) return;
                             stickyResizeRafId = requestAnimationFrame(() => {
                                 stickyResizeRafId = null;
-                                centerStickyPlayer(playerElementRef);
+                                centerStickyPlayer(playerElementRef, true);
                                 syncButtonDimensions();
                             });
                         }
@@ -2154,7 +2154,7 @@
     }
 
     // --- STICKY PLAYER POSITIONING & RESIZING ---
-    function centerStickyPlayer(fixedPlayer) { 
+    function centerStickyPlayer(fixedPlayer, skipYouTubeSync = false) {
         if (!fixedPlayer?.classList.contains('eyv-player-fixed')) return;
         const mastheadOffset = getMastheadOffset();
         const watchFlexy = document.querySelector('ytd-watch-flexy');
@@ -2261,55 +2261,64 @@
             }
         }
 
-        // Force YouTube to acknowledge the new size immediately
-        // Set flag to tell our resize listener to ignore this dispatch (prevents infinite loops)
-        window.eyvIsDispatching = true;
-        window.dispatchEvent(new Event('resize', { bubbles: true }));
-        window.eyvIsDispatching = false;
+        if (!skipYouTubeSync) {
+            // Force YouTube to acknowledge the new size immediately
+            // Set flag to tell our resize listener to ignore this dispatch (prevents infinite loops)
+            window.eyvIsDispatching = true;
+            window.dispatchEvent(new Event('resize', { bubbles: true }));
+            window.eyvIsDispatching = false;
 
-        // Force YouTube's internal video player to recalculate dimensions
-        // This addresses the issue where the outer container resizes but the video element doesn't
-        const moviePlayer = fixedPlayer.querySelector('#movie_player');
-        const videoElement = fixedPlayer.querySelector('video.html5-main-video');
+            // Force YouTube's internal video player to recalculate dimensions
+            // This addresses the issue where the outer container resizes but the video element doesn't
+            const moviePlayer = fixedPlayer.querySelector('#movie_player');
+            const videoElement = fixedPlayer.querySelector('video.html5-main-video');
 
-        if (moviePlayer) {
-            // Use YouTube's internal player API to trigger a proper size recalculation
-            // This is the same mechanism YouTube uses when pausing triggers a correct resize
-            if (typeof moviePlayer.setSize === 'function') {
-                try {
-                    moviePlayer.setSize(newW, newH);
-                    if (DEBUG) console.log(`[EYV DBG] Called moviePlayer.setSize(${newW}, ${newH})`);
-                } catch(e) {
-                    if (DEBUG) console.log('[EYV DBG] moviePlayer.setSize failed:', e);
+            if (moviePlayer) {
+                // Use YouTube's internal player API to trigger a proper size recalculation
+                // This is the same mechanism YouTube uses when pausing triggers a correct resize
+                if (typeof moviePlayer.setSize === 'function') {
+                    try {
+                        moviePlayer.setSize(newW, newH);
+                        if (DEBUG) console.log(`[EYV DBG] Called moviePlayer.setSize(${newW}, ${newH})`);
+                    } catch(e) {
+                        if (DEBUG) console.log('[EYV DBG] moviePlayer.setSize failed:', e);
+                    }
                 }
+
+                // Force reflow on movie_player to trigger layout recalculation
+                void moviePlayer.offsetHeight;
+
+                // Dispatch resize event on movie_player (non-bubbling to avoid interfering with clicks)
+                moviePlayer.dispatchEvent(new Event('resize', { bubbles: false }));
             }
 
-            // Force reflow on movie_player to trigger layout recalculation
-            void moviePlayer.offsetHeight;
-
-            // Dispatch resize event on movie_player (non-bubbling to avoid interfering with clicks)
-            moviePlayer.dispatchEvent(new Event('resize', { bubbles: false }));
+            if (videoElement) {
+                // Force the video element to recalculate
+                void videoElement.offsetHeight;
+            }
         }
 
-        if (videoElement) {
-            // Force the video element to recalculate
-            void videoElement.offsetHeight;
-        }
-
-        // Schedule a post-frame cleanup to override any YouTube-set inline dimensions
-        // YouTube's own resize handler may run after ours and set stale pixel values
+        // Schedule a double-rAF cleanup to override any YouTube-set inline dimensions
+        // YouTube's own resize handler may run after ours and set stale pixel values;
+        // double-rAF ensures we run 2 frames later, catching deferred YouTube handlers
         requestAnimationFrame(() => {
-            if (!fixedPlayer?.classList.contains('eyv-player-fixed')) return;
-            const vc = fixedPlayer.querySelector('.html5-video-container');
-            const ve = fixedPlayer.querySelector('video.html5-main-video');
-            if (vc) {
-                vc.style.setProperty('width', '100%', 'important');
-                vc.style.setProperty('height', '100%', 'important');
-            }
-            if (ve) {
-                ve.style.setProperty('width', '100%', 'important');
-                ve.style.setProperty('height', '100%', 'important');
-            }
+            requestAnimationFrame(() => {
+                if (!fixedPlayer?.classList.contains('eyv-player-fixed')) return;
+                const vc = fixedPlayer.querySelector('.html5-video-container');
+                const ve = fixedPlayer.querySelector('video.html5-main-video');
+                if (vc) {
+                    vc.style.setProperty('width', '100%', 'important');
+                    vc.style.setProperty('height', '100%', 'important');
+                    vc.style.setProperty('left', '0', 'important');
+                    vc.style.setProperty('top', '0', 'important');
+                }
+                if (ve) {
+                    ve.style.setProperty('width', '100%', 'important');
+                    ve.style.setProperty('height', '100%', 'important');
+                    ve.style.setProperty('left', '0', 'important');
+                    ve.style.setProperty('top', '0', 'important');
+                }
+            });
         });
     }
 

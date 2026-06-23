@@ -24,14 +24,22 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
 
+    // Show a transient inline status message (non-blocking, replaces alert()).
+    let statusHideTimer = null;
+    function showStatus(message, isError = false) {
+        if (!saveIndicator) return;
+        saveIndicator.textContent = message;
+        saveIndicator.classList.toggle('error', isError);
+        saveIndicator.style.display = 'block';
+        if (statusHideTimer) clearTimeout(statusHideTimer);
+        statusHideTimer = setTimeout(() => {
+            saveIndicator.style.display = 'none';
+        }, isError ? 4000 : 2000);
+    }
+
     // Function to show save confirmation
     function showSaveConfirmation() {
-        if (saveIndicator) {
-            saveIndicator.style.display = 'block';
-            setTimeout(() => {
-                saveIndicator.style.display = 'none';
-            }, 2000);
-        }
+        showStatus('✓ Settings saved', false);
     }
 
     // Helper to check if Chrome context is still valid
@@ -167,6 +175,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         console.log('[EYV Popup] Loaded settings:', result);
 
+        // Initialize checkboxes first - independent of the action-card status spans, so a
+        // missing status span never leaves the toggles displaying their HTML default.
+        defaultStickyToggle.checked = result.defaultStickyEnabled;
+        inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
+        inactiveAtEndToggle.checked = result.inactiveAtEnd;
+
         // Update action cards with null checks
         const stickyStatus = stickyPlayerCard.querySelector('.action-status');
         const pipStatus = pipCard.querySelector('.action-status');
@@ -176,15 +190,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         updateActionCardUI(stickyPlayerCard, stickyStatus, result.stickyPlayerEnabled);
         updateActionCardUI(pipCard, pipStatus, result.pipEnabled);
-
-        // Update checkboxes
-        defaultStickyToggle.checked = result.defaultStickyEnabled;
-        inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
-        inactiveAtEndToggle.checked = result.inactiveAtEnd;
     })
     .catch(error => {
         console.error('[EYV Popup] Storage error or timeout:', error);
-        alert('Failed to load settings. Please refresh the popup.');
+        showStatus('Failed to load settings. Please reopen the popup.', true);
     });
 
     // Handle Sticky Player card click
@@ -209,10 +218,9 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         })
         .then(() => {
-            if (!isChromeContextValid()) {
-                updateActionCardUI(stickyPlayerCard, statusElement, !newState);
-                return;
-            }
+            // The write already succeeded; if the context is now gone, just skip the
+            // follow-up message/indicator. Do NOT revert the UI - the value is persisted.
+            if (!isChromeContextValid()) return;
             showSaveConfirmation();
             sendMessageToContentScript({ type: "FEATURE_TOGGLE", feature: 'stickyPlayer', enabled: newState });
         })
@@ -220,7 +228,7 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('[EYV Popup] Storage error:', error);
             updateActionCardUI(stickyPlayerCard, statusElement, !newState);
             if (error.message && error.message.includes('QUOTA')) {
-                alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+                showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
             }
         });
     });
@@ -247,10 +255,9 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         })
         .then(() => {
-            if (!isChromeContextValid()) {
-                updateActionCardUI(pipCard, statusElement, !newState);
-                return;
-            }
+            // The write already succeeded; if the context is now gone, just skip the
+            // follow-up message/indicator. Do NOT revert the UI - the value is persisted.
+            if (!isChromeContextValid()) return;
             showSaveConfirmation();
             sendMessageToContentScript({ type: "FEATURE_TOGGLE", feature: 'pip', enabled: newState });
         })
@@ -258,7 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('[EYV Popup] Storage error:', error);
             updateActionCardUI(pipCard, statusElement, !newState);
             if (error.message && error.message.includes('QUOTA')) {
-                alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+                showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
             }
         });
     });
@@ -284,23 +291,20 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 })
                 .then(() => {
-                    // Double-check Chrome context is still valid after async callback
-                    if (!isChromeContextValid()) {
-                        toggle.checked = !newValue; // Revert UI on error
-                        return;
-                    }
+                    // The write already succeeded; if the context is now gone, just skip
+                    // the follow-up message/indicator. Do NOT revert - the value is saved.
+                    if (!isChromeContextValid()) return;
                     showSaveConfirmation();
                     // Notify content script so it can immediately activate sticky if enabled
                     sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'defaultStickyEnabled', value: newValue });
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI on error
-                    // Check for quota errors
+                    toggle.checked = !newValue; // Revert UI - the write failed
                     if (error.message && error.message.includes('QUOTA')) {
-                        alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
                     } else if (error.message && error.message.includes('timeout')) {
-                        alert('Storage operation timed out. Please try again.');
+                        showStatus('Storage operation timed out. Please try again.', true);
                     }
                 });
             }, DEBOUNCE_MS);
@@ -328,22 +332,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 })
                 .then(() => {
-                    // Double-check Chrome context is still valid after async callback
-                    if (!isChromeContextValid()) {
-                        toggle.checked = !newValue; // Revert UI on error
-                        return;
-                    }
+                    // The write already succeeded; if the context is now gone, just skip
+                    // the follow-up message/indicator. Do NOT revert - the value is saved.
+                    if (!isChromeContextValid()) return;
                     showSaveConfirmation();
                     sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'inactiveWhenPaused', value: newValue });
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI on error
-                    // Check for quota errors
+                    toggle.checked = !newValue; // Revert UI - the write failed
                     if (error.message && error.message.includes('QUOTA')) {
-                        alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
                     } else if (error.message && error.message.includes('timeout')) {
-                        alert('Storage operation timed out. Please try again.');
+                        showStatus('Storage operation timed out. Please try again.', true);
                     }
                 });
             }, DEBOUNCE_MS);
@@ -371,22 +372,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 })
                 .then(() => {
-                    // Double-check Chrome context is still valid after async callback
-                    if (!isChromeContextValid()) {
-                        toggle.checked = !newValue; // Revert UI on error
-                        return;
-                    }
+                    // The write already succeeded; if the context is now gone, just skip
+                    // the follow-up message/indicator. Do NOT revert - the value is saved.
+                    if (!isChromeContextValid()) return;
                     showSaveConfirmation();
                     sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'inactiveAtEnd', value: newValue });
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI on error
-                    // Check for quota errors
+                    toggle.checked = !newValue; // Revert UI - the write failed
                     if (error.message && error.message.includes('QUOTA')) {
-                        alert('Storage quota exceeded. Please clear some browser data or disable other extensions.');
+                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
                     } else if (error.message && error.message.includes('timeout')) {
-                        alert('Storage operation timed out. Please try again.');
+                        showStatus('Storage operation timed out. Please try again.', true);
                     }
                 });
             }, DEBOUNCE_MS);

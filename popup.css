@@ -203,6 +203,12 @@ body {
     margin-bottom: 0;
 }
 
+.save-indicator.error {
+    background-color: #f8d7da !important;
+    color: #721c24 !important;
+    border: 1px solid #f5c6cb !important;
+}
+
 @keyframes fadeInOut {
     0% { opacity: 0; transform: translateY(-5px); }
     20% { opacity: 1; transform: translateY(0); }

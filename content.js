@@ -2351,6 +2351,12 @@
                     ve.style.setProperty('height', '100%', 'important');
                     ve.style.setProperty('left', '0', 'important');
                     ve.style.setProperty('top', '0', 'important');
+                    // Forcing the video element to 100%/100% gives it the box's aspect
+                    // ratio, not the video's. YouTube's object-fit defaults to 'cover',
+                    // which then crops/zooms the frame to fill a non-16:9 box (e.g. theater,
+                    // or a leftover override after deactivation). 'contain' letterboxes the
+                    // full frame instead, matching YouTube's native sizing.
+                    ve.style.setProperty('object-fit', 'contain', 'important');
                 }
             });
         });

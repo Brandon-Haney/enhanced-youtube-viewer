@@ -447,7 +447,11 @@
     let attempts = 0;
     let mainPollInterval;
     let playerPlaceholder = null;
-    let originalPlayerAspectRatio = 16 / 9;
+    // Stored as height/width (a 16:9 video is 9/16 = 0.5625). Used as
+    // height = width * originalPlayerAspectRatio, so the default MUST be 9/16,
+    // not 16/9 — an inverted default produces a box taller than it is wide,
+    // letterboxing the video with a black band below it.
+    let originalPlayerAspectRatio = 9 / 16;
     let stickyButtonElement = null;
     let playerElementRef = null;
     let playerStateObserver = null;
@@ -1653,8 +1657,15 @@
                     return;
                 }
 
-                // Calculate and validate aspect ratio to prevent Infinity/NaN
-                const calculatedAspectRatio = initialHeight / initialWidth;
+                // Calculate and validate aspect ratio to prevent Infinity/NaN.
+                // Prefer the video's INTRINSIC dimensions (true frame ratio, e.g. 16:9)
+                // over the player BOX rect: in theater mode the box is height-constrained,
+                // so the box ratio is not the video ratio and would distort later resizes.
+                let calculatedAspectRatio = initialHeight / initialWidth;
+                const videoForRatio = playerElement.querySelector('video.html5-main-video');
+                if (videoForRatio && videoForRatio.videoWidth > 0 && videoForRatio.videoHeight > 0) {
+                    calculatedAspectRatio = videoForRatio.videoHeight / videoForRatio.videoWidth;
+                }
                 if (isFinite(calculatedAspectRatio) && calculatedAspectRatio > 0) {
                     originalPlayerAspectRatio = calculatedAspectRatio;
                 } else {
@@ -2271,8 +2282,15 @@
             }
         }
 
-        // Calculate height with validation to prevent NaN/Infinity
-        const validAspectRatio = (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0) ? originalPlayerAspectRatio : 9/16;
+        // Calculate height with validation to prevent NaN/Infinity.
+        // Prefer the video's live intrinsic ratio so every resize matches the actual
+        // frame, regardless of when/how originalPlayerAspectRatio was captured (e.g.
+        // auto-sticky on load can capture a height-constrained theater box ratio).
+        let validAspectRatio = (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0) ? originalPlayerAspectRatio : 9/16;
+        const liveVideo = fixedPlayer.querySelector('video.html5-main-video');
+        if (liveVideo && liveVideo.videoWidth > 0 && liveVideo.videoHeight > 0) {
+            validAspectRatio = liveVideo.videoHeight / liveVideo.videoWidth;
+        }
         let newH = newW * validAspectRatio;
 
         // Constrain height to viewport to prevent OSD controls from being pushed off screen

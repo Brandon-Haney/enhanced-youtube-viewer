@@ -88,6 +88,7 @@
             wasStickyBeforeEnd = false;
             wasStickyDuringCurrentVideo = false;
             isInitializing = false;
+            isAutoPauseResumeActive = false;
             originalPlayerParent = null;
             originalPlayerNextSibling = null;
 
@@ -97,14 +98,15 @@
                 playerStateObserverRafId = null;
             }
 
-            // Clear sticky resize rAF IDs
-            if (stickyResizeRafId) {
-                cancelAnimationFrame(stickyResizeRafId);
-                stickyResizeRafId = null;
+            // Clear sticky recalc rAF ID
+            if (stickyRecalcRafId) {
+                cancelAnimationFrame(stickyRecalcRafId);
+                stickyRecalcRafId = null;
             }
-            if (resizeRafId) {
-                cancelAnimationFrame(resizeRafId);
-                resizeRafId = null;
+
+            if (chatToggleRafId) {
+                cancelAnimationFrame(chatToggleRafId);
+                chatToggleRafId = null;
             }
 
             // Clear delayed resize recalculation timeouts
@@ -113,11 +115,20 @@
 
             // Null interval variables to prevent memory leaks
             mainPollInterval = null;
+            activeSyncInterval = null;
             playerStateObserver = null;
             videoElementObserver = null;
             stickyResizeObserver = null;
             currentVideoElement = null;
             stickyButtonElement = null; // Clear button reference too
+
+            // Clear the scrub-listener dataset guard so listeners re-attach after SPA
+            // navigation. YouTube reuses the same progress bar across watch->watch navs,
+            // so the dataset would otherwise stay 'true' while cleanup() removed the
+            // listeners, leaving scrubbing detection permanently un-wired.
+            document.querySelectorAll('.ytp-progress-bar-container').forEach(pb => {
+                delete pb.dataset.eyvScrubListener;
+            });
 
             // FIX: Reset WeakSets to prevent "already attached" detection on navigation back
             // WeakSets can't be cleared, so we create new ones
@@ -461,8 +472,8 @@
     let lastSyncedHeight = null;
     let activeSyncInterval = null; // Track active sync polling to prevent overlaps
     let playerStateObserverRafId = null; // Track RAF ID for playerStateObserver to cancel on cleanup
-    let stickyResizeRafId = null; // Track ResizeObserver rAF ID for cleanup
-    let resizeRafId = null; // Track window resize rAF ID for cleanup
+    let stickyRecalcRafId = null; // Shared rAF ID for both resize sources (window resize + ResizeObserver) so they dedupe each other
+    let chatToggleRafId = null; // Track live-chat ResizeObserver rAF ID for cleanup
     let originalPlayerParent = null; // Store original parent before moving to body for sticky mode
     let originalPlayerNextSibling = null; // Store next sibling for correct reinsertion when deactivating
 
@@ -677,7 +688,7 @@
                                                 if (stickyButtonElement?.classList.contains('active')) {
                                                     wasStickyBeforePiP = true;
                                                     if (DEBUG) console.log("[EYV DBG] OS PiP entered. Deactivating sticky.");
-                                                    deactivateStickyModeInternal();
+                                                    deactivateStickyModeInternal(false, true);
                                                 }
                                             }
                                         } catch (error) {
@@ -1024,7 +1035,7 @@
                                 if (stickyButtonElement?.classList.contains('active')) {
                                     wasStickyBeforePiP = true;
                                     if (DEBUG) console.log("[EYV DBG] OS PiP entered. Deactivating sticky.");
-                                    deactivateStickyModeInternal();
+                                    deactivateStickyModeInternal(false, true);
                                 }
                             }
                         } catch (error) {
@@ -1267,31 +1278,16 @@
         const resizeHandler = (e) => {
             // Stop the infinite loop: if we caused this resize event, ignore it
             if (window.eyvIsDispatching) return;
-            // Throttle to one recalculation per animation frame (~16ms) instead of debouncing
-            // This gives smooth visual updates during continuous window dragging
-            if (resizeRafId) return;
-            resizeRafId = requestAnimationFrame(() => {
-                resizeRafId = null;
-                if (DEBUG) console.log('[EYV DBG] ========== WINDOW RESIZE EVENT FIRED ==========');
-
-                // Resize the sticky player container (skip YouTube sync during continuous resize)
-                if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                    centerStickyPlayer(playerElementRef, true);
-
-                    // Re-assert a full YouTube sync once resize activity settles
-                    scheduleStickyResizeSettle();
-                }
-
-                // Sync our custom buttons
-                syncButtonDimensions();
-            });
+            // Throttle to one recalculation per animation frame, shared with the
+            // stickyResizeObserver so the two sources don't double the work per frame.
+            scheduleStickyRecalc();
         };
         cleanupRegistry.addListener(window, 'resize', resizeHandler);
         cleanupRegistry.addListener(document, 'fullscreenchange', handleFullscreenChange);
     }
 
     // --- STICKY PLAYER HELPER ---
-    function deactivateStickyModeInternal(preservePauseFlag = false) {
+    function deactivateStickyModeInternal(preservePauseFlag = false, preserveModeFlags = false) {
         if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
         if (DEBUG) console.log('[EYV DBG] Deactivating sticky mode.'); else console.log('[EYV] Deactivating sticky mode.');
         if (playerElementRef) {
@@ -1366,11 +1362,16 @@
         // SECURITY: innerHTML is safe here - pinSVGIcon is a static SVG string constant (no user input)
         stickyButtonElement.innerHTML = pinSVGIcon;
         // Reset state flags to prevent desynchronization (optionally preserve pause flag)
-        wasStickyBeforePiP = false;
         if (!preservePauseFlag) {
             wasStickyBeforePause = false;
         }
-        wasStickyBeforeOsFullscreen = false;
+        // The PiP/fullscreen/miniplayer enter paths set their "was sticky" flag right
+        // before calling deactivate; preserveModeFlags lets them keep it so it survives
+        // to drive re-activation on exit. Manual/conflict deactivations leave it false.
+        if (!preserveModeFlags) {
+            wasStickyBeforePiP = false;
+            wasStickyBeforeOsFullscreen = false;
+        }
     }
     
     // --- ATTACH VIDEO EVENT LISTENERS ---
@@ -1701,15 +1702,8 @@
                 if (!stickyResizeObserver) {
                     stickyResizeObserver = new ResizeObserver(() => {
                         if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                            // Throttle to one recalculation per animation frame for smooth resizing
-                            if (stickyResizeRafId) return;
-                            stickyResizeRafId = requestAnimationFrame(() => {
-                                stickyResizeRafId = null;
-                                centerStickyPlayer(playerElementRef, true);
-                                syncButtonDimensions();
-                                // Re-assert a full YouTube sync once resize activity settles
-                                scheduleStickyResizeSettle();
-                            });
+                            // Shared throttle with the window 'resize' listener (one rAF for both)
+                            scheduleStickyRecalc();
                         }
                     });
 
@@ -1837,7 +1831,7 @@
                     }
                 }
                 if (shouldDeactivate && stickyButtonElement?.isConnected && stickyButtonElement.classList.contains('active')) {
-                    deactivateStickyModeInternal();
+                    deactivateStickyModeInternal(false, true);
                     return;
                 }
             }
@@ -1888,11 +1882,11 @@
                 if (DEBUG) console.log('[EYV DBG Video Observer] Video element replaced (ad or quality change), reattaching listeners');
                 currentVideoElement = newVideoElement;
 
-                // FIX: Reset wasStickyDuringCurrentVideo when video changes to prevent
-                // wrong re-activation behavior between videos
-                wasStickyDuringCurrentVideo = false;
-                wasStickyBeforeEnd = false;
-                if (DEBUG) console.log('[EYV DBG] Reset sticky tracking flags for new video');
+                // NOTE: Do NOT reset wasStickyDuringCurrentVideo / wasStickyBeforeEnd here.
+                // YouTube can swap the media element in-place mid-playback (some ad/quality/
+                // codec changes) without any actual navigation; clearing the flags then would
+                // disarm "Inactive At End" re-activation for the current video. Genuine
+                // navigation already resets both flags in cleanup() on yt-navigate-start.
 
                 // FIX: Video element was replaced - reattach listeners immediately
                 // This happens during ad insertion or quality changes
@@ -1963,7 +1957,11 @@
                         if (playerElementRef?.isConnected) {
                             const isStickyActive = playerElementRef.classList.contains('eyv-player-fixed');
 
-                            requestAnimationFrame(() => {
+                            chatToggleRafId = requestAnimationFrame(() => {
+                                chatToggleRafId = null;
+                                // Bail if the player was torn down between scheduling and this frame
+                                // (e.g. an SPA navigation arrived after the chat toggle).
+                                if (!playerElementRef?.isConnected) return;
                                 // Recenter sticky player if active
                                 if (isStickyActive) {
                                     centerStickyPlayer(playerElementRef);
@@ -2057,7 +2055,7 @@
                 if (document.fullscreenElement) {
                     if (stickyButtonElement.classList.contains('active')) {
                         wasStickyBeforeOsFullscreen = true;
-                        deactivateStickyModeInternal();
+                        deactivateStickyModeInternal(false, true);
                     } else { wasStickyBeforeOsFullscreen = false; }
                     // Sync button dimensions when entering fullscreen
                     setTimeout(() => {
@@ -2087,12 +2085,18 @@
             if (DEBUG) console.log("[EYV DBG tryReactivating] No videoElement provided.");
             return;
         }
+        // Snapshot the flags synchronously now: loadSettings resolves on a later
+        // microtask, and callers reset these flags on the line right after calling us,
+        // which runs before the .then(). Reading the live globals there would always
+        // observe false. Consume the snapshot instead.
+        const wasStickyPiP = wasStickyBeforePiP;
+        const wasStickyOsFull = wasStickyBeforeOsFullscreen;
         loadSettings(['defaultStickyEnabled'])
             .then(result => {
-                const shouldTryReactivate = (isExitingOsFullscreen && (wasStickyBeforeOsFullscreen || (result && result.defaultStickyEnabled))) ||
-                                          (!isExitingOsFullscreen && (wasStickyBeforePiP || (result && result.defaultStickyEnabled)));
+                const shouldTryReactivate = (isExitingOsFullscreen && (wasStickyOsFull || (result && result.defaultStickyEnabled))) ||
+                                          (!isExitingOsFullscreen && (wasStickyPiP || (result && result.defaultStickyEnabled)));
                 if (shouldTryReactivate) {
-                    if (DEBUG) console.log(`[EYV DBG tryReactivating] Attempting re-activation. wasStickyPiP: ${wasStickyBeforePiP}, wasStickyOsFS: ${wasStickyBeforeOsFullscreen}, default: ${result.defaultStickyEnabled}`);
+                    if (DEBUG) console.log(`[EYV DBG tryReactivating] Attempting re-activation. wasStickyPiP: ${wasStickyPiP}, wasStickyOsFS: ${wasStickyOsFull}, default: ${result.defaultStickyEnabled}`);
                     const ytdApp = document.querySelector('ytd-app');
                     const isMini = ytdApp?.hasAttribute('miniplayer-is-active');
                     const isYtFull = ytdApp?.hasAttribute('fullscreen');
@@ -2148,7 +2152,7 @@
                     if (stickyButtonElement?.classList.contains('active')) {
                         wasStickyBeforePiP = true;
                         if (DEBUG) console.log("[EYV DBG] PiP requested while sticky active. Deactivating sticky.");
-                        deactivateStickyModeInternal();
+                        deactivateStickyModeInternal(false, true);
                         await new Promise(resolve => setTimeout(resolve, 50));
                     } else { wasStickyBeforePiP = false; }
 
@@ -2173,6 +2177,24 @@
     // Staggered recalcs (150/300/500ms) win the race against YouTube's deferred layout
     // handlers. Each call cancels pending recalcs, so during continuous activity the
     // settle keeps getting pushed out and only fires once dragging stops.
+    // Single throttled recalc shared by the window 'resize' listener and the
+    // stickyResizeObserver. Both observe the same underlying viewport change and would
+    // otherwise each run the full recalc on their own rAF every frame; sharing one rAF id
+    // means whichever fires first does the work and the other dedupes against it.
+    function scheduleStickyRecalc() {
+        if (stickyRecalcRafId) return;
+        stickyRecalcRafId = requestAnimationFrame(() => {
+            stickyRecalcRafId = null;
+            if (playerElementRef?.classList.contains('eyv-player-fixed')) {
+                centerStickyPlayer(playerElementRef, true);
+                // Re-assert a full YouTube sync once resize activity settles
+                scheduleStickyResizeSettle();
+            }
+            // Sync our custom buttons (cheap no-op when none are present)
+            syncButtonDimensions();
+        });
+    }
+
     function scheduleStickyResizeSettle() {
         delayedRecalcTimeouts.forEach(id => clearTimeout(id));
         delayedRecalcTimeouts = [];
@@ -2254,8 +2276,11 @@
         let newH = newW * validAspectRatio;
 
         // Constrain height to viewport to prevent OSD controls from being pushed off screen
-        // Leave some margin (100px) to ensure controls are fully visible
-        const availableHeight = window.innerHeight - mastheadOffset - 100;
+        // Leave some margin (100px) to ensure controls are fully visible. Clamp to a small
+        // positive minimum so a very short viewport still applies a valid height instead of
+        // computing a negative one that trips the final guard and aborts (leaving the player
+        // frozen at stale oversized dimensions).
+        const availableHeight = Math.max(120, window.innerHeight - mastheadOffset - 100);
         if (newH > availableHeight) {
             if (DEBUG) console.log(`[EYV DBG] Limiting player height from ${newH}px to ${availableHeight}px to keep controls visible`);
             newH = availableHeight;

@@ -1258,18 +1258,8 @@
                 if (playerElementRef?.classList.contains('eyv-player-fixed')) {
                     centerStickyPlayer(playerElementRef, true);
 
-                    // Cancel previous delayed recalculations before scheduling new ones
-                    delayedRecalcTimeouts.forEach(id => clearTimeout(id));
-                    delayedRecalcTimeouts = [];
-
-                    // Schedule one delayed recalculation to catch YouTube layout settling
-                    const id = setTimeout(() => {
-                        if (playerElementRef?.classList.contains('eyv-player-fixed')) {
-                            centerStickyPlayer(playerElementRef);
-                            syncButtonDimensions();
-                        }
-                    }, 150);
-                    delayedRecalcTimeouts.push(id);
+                    // Re-assert a full YouTube sync once resize activity settles
+                    scheduleStickyResizeSettle();
                 }
 
                 // Sync our custom buttons
@@ -1697,6 +1687,8 @@
                                 stickyResizeRafId = null;
                                 centerStickyPlayer(playerElementRef, true);
                                 syncButtonDimensions();
+                                // Re-assert a full YouTube sync once resize activity settles
+                                scheduleStickyResizeSettle();
                             });
                         }
                     });
@@ -2151,6 +2143,28 @@
         };
         cleanupRegistry.addListener(button, 'click', pipClickHandler);
         return button;
+    }
+
+    // Schedule a full YouTube sync (setSize, video recalc) after resize activity settles.
+    // During continuous resize we deliberately skip YouTube sync to avoid a race where
+    // YouTube resets the inner <video> to stale dimensions. This re-asserts the correct
+    // size once the layout stops changing - without it, the container resizes but the
+    // video element stays stale until a pause/unpause forces YouTube's own setSize.
+    // Staggered recalcs (150/300/500ms) win the race against YouTube's deferred layout
+    // handlers. Each call cancels pending recalcs, so during continuous activity the
+    // settle keeps getting pushed out and only fires once dragging stops.
+    function scheduleStickyResizeSettle() {
+        delayedRecalcTimeouts.forEach(id => clearTimeout(id));
+        delayedRecalcTimeouts = [];
+        [150, 300, 500].forEach(delay => {
+            const id = setTimeout(() => {
+                if (playerElementRef?.classList.contains('eyv-player-fixed')) {
+                    centerStickyPlayer(playerElementRef);
+                    syncButtonDimensions();
+                }
+            }, delay);
+            delayedRecalcTimeouts.push(id);
+        });
     }
 
     // --- STICKY PLAYER POSITIONING & RESIZING ---

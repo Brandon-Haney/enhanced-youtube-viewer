@@ -544,7 +544,7 @@
                     if (message.enabled) {
                         // ENABLE: Create button if it doesn't exist
                         if (!stickyBtn) {
-                            const player = document.querySelector('ytd-player');
+                            const player = findActivePlayer();
                             const playerRightControls = player?.querySelector('.ytp-right-controls');
                             const videoElement = player?.querySelector('video.html5-main-video');
 
@@ -641,7 +641,7 @@
                     if (message.enabled) {
                         // ENABLE: Create button if it doesn't exist
                         if (!pipBtn) {
-                            const player = document.querySelector('ytd-player');
+                            const player = findActivePlayer();
                             const playerRightControls = player?.querySelector('.ytp-right-controls');
                             const videoElement = player?.querySelector('video.html5-main-video');
 
@@ -765,6 +765,26 @@
     const pipSVGActive = `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" focusable="false" class="style-scope ytp-button" style="pointer-events: none; display: block; width: 100%; height: 100%;"><g fill="var(--yt-spec-static-brand-red, #FF0000)"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></g></svg>`;
 
     // --- UTILITY FUNCTIONS ---
+    // Find the live YouTube player element. Prefer the populated/relocated player
+    // over the first ytd-player in the DOM: once sticky mode moves the real player
+    // to <body>, YouTube leaves an empty ytd-player shell behind in
+    // #player-container. A plain querySelector('ytd-player') returns that empty
+    // shell first (it appears earlier in document order), so init binds to a player
+    // with no controls/video and waits out the full 15s controls timeout.
+    function findActivePlayer() {
+        const players = document.querySelectorAll('ytd-player');
+        if (players.length <= 1) return players[0] || null;
+        // Prefer the relocated sticky player if one is active
+        for (const p of players) {
+            if (p.classList.contains('eyv-player-fixed')) return p;
+        }
+        // Otherwise prefer a player that actually contains the video chrome
+        for (const p of players) {
+            if (p.querySelector('.html5-video-player') && p.querySelector('video.html5-main-video')) return p;
+        }
+        return players[0];
+    }
+
     function getMastheadOffset() {
         const masthead = document.querySelector('#masthead-container ytd-masthead') || document.querySelector('#masthead-container');
         if (masthead?.offsetHeight > 0) return masthead.offsetHeight;
@@ -875,7 +895,7 @@
 
         mainPollInterval = setInterval(() => {
             attempts++;
-            const playerElement = document.querySelector('ytd-player');
+            const playerElement = findActivePlayer();
             if (playerElement) {
                 clearInterval(mainPollInterval);
                 isInitializing = false;

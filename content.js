@@ -100,6 +100,9 @@
             cornerDragState = null;
             cornerResizeState = null;
             suppressNextCornerClick = false;
+            // Finalize any in-flight transition so a stuck transform/class can't survive nav.
+            cancelStickyFlip();
+            endCornerSnapAnim();
             // Remove any dangling drag/resize listeners from an interrupted gesture.
             document.removeEventListener('mousemove', onCornerMouseMove, true);
             document.removeEventListener('mouseup', onCornerMouseUp, true);
@@ -504,6 +507,9 @@
     let cornerWidth = CORNER_DEFAULT_WIDTH; // Current mini-player width (px), persisted as stickyCornerWidth
     let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
     let cornerResizeState = null; // Bookkeeping for an in-progress corner-player resize
+    let stickyFlipCleanup = null; // Finalizer for an in-flight FLIP transition (clears the temp transform)
+    let stickyFlipTimeoutId = null; // Safety-net timer to end a FLIP if transitionend never fires
+    let cornerSnapTimeoutId = null; // Safety-net timer to end the drag-release snap transition
     let suppressNextCornerClick = false; // Swallow the click event that ends a drag (so it doesn't toggle play)
     let lastInlinePlayerWidth = 0; // Player's inline size captured at activation (for the corner placeholder)
     let lastInlinePlayerHeight = 0; // Accurate for both default and theater, where width*aspect differs from actual
@@ -1037,6 +1043,7 @@
     function onCornerMouseDown(e) {
         if (stickyMode !== 'corner' || e.button !== 0 || !playerElementRef) return;
         if (e.target.closest('#eyv-resize-handle, .ytp-chrome-bottom, .ytp-chrome-controls, .ytp-progress-bar-container, .eyv-player-button, .eyv-pip-button, button, a, input')) return;
+        endCornerSnapAnim(); // a fresh grab must be instant, never mid-snap-transition
         const rect = playerElementRef.getBoundingClientRect();
         cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top, moved: false };
         document.addEventListener('mousemove', onCornerMouseMove, true);
@@ -1073,6 +1080,9 @@
         // Snap to the nearest corner based on the mini-player's center, then remember it.
         cornerAnchor = nearestCornerForRect(playerElementRef.getBoundingClientRect());
         saveCornerAnchor(cornerAnchor);
+        // Glide to the snapped corner: arm the position transition BEFORE centerStickyPlayer
+        // applies the new left/top so the change animates instead of jumping.
+        startCornerSnapAnim();
         centerStickyPlayer(playerElementRef);
     }
 
@@ -1107,6 +1117,83 @@
 
     function hideSnapPreview() {
         document.getElementById('eyv-snap-preview')?.remove();
+    }
+
+    // --- TRANSITION POLISH (FLIP travel + drag-release snap glide) ---
+    // Respect the OS "reduce motion" preference for every sticky animation.
+    function prefersReducedMotion() {
+        try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+    }
+
+    // Cancel/finalize any in-flight FLIP, clearing its temporary transform/transition.
+    function cancelStickyFlip() {
+        if (stickyFlipCleanup) { try { stickyFlipCleanup(); } catch (e) { /* ignore */ } }
+    }
+
+    // FLIP: animate `element` from a previously-captured `firstRect` to its CURRENT
+    // (already-applied) position and size. Used for the scroll corner-mini <-> full-size
+    // transition, where the player also moves between document.body (fixed) and its in-flow
+    // parent — a plain CSS transition can't span that DOM move, but a transform can. Uses
+    // GPU transform only (no reflow), so the video stays crisp as the whole player scales.
+    function flipStickyTransition(element, firstRect) {
+        if (!element || !firstRect || prefersReducedMotion()) return;
+        cancelStickyFlip(); // finalize any previous flip before starting a new one
+        const lastRect = element.getBoundingClientRect();
+        if (!(firstRect.width > 0 && firstRect.height > 0 && lastRect.width > 0 && lastRect.height > 0)) return;
+        const dx = firstRect.left - lastRect.left;
+        const dy = firstRect.top - lastRect.top;
+        const sx = firstRect.width / lastRect.width;
+        const sy = firstRect.height / lastRect.height;
+        // Skip an imperceptible animation (avoids a pointless one-frame flicker).
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return;
+
+        // Invert: paint the element at its old position/size first...
+        element.style.transformOrigin = 'top left';
+        element.style.transition = 'none';
+        element.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+        void element.offsetWidth; // commit the start state before transitioning
+
+        const finish = () => {
+            element.removeEventListener('transitionend', onEnd);
+            if (stickyFlipTimeoutId) { clearTimeout(stickyFlipTimeoutId); stickyFlipTimeoutId = null; }
+            stickyFlipCleanup = null;
+            element.style.transition = '';
+            element.style.transform = '';
+            element.style.transformOrigin = '';
+        };
+        const onEnd = (e) => { if (e.target === element && e.propertyName === 'transform') finish(); };
+        stickyFlipCleanup = finish;
+
+        // ...then play: release the transform so it glides to its real position/size.
+        requestAnimationFrame(() => {
+            if (stickyFlipCleanup !== finish) return; // superseded/cancelled before we ran
+            element.style.transition = 'transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1)';
+            element.style.transform = 'none';
+            element.addEventListener('transitionend', onEnd);
+            stickyFlipTimeoutId = setTimeout(finish, 400); // safety net if transitionend is missed
+        });
+    }
+
+    // Drag-release snap: arm a brief position/size transition on the corner player so the
+    // snap to the nearest corner glides instead of jumping. Toggled per-gesture (a class),
+    // so live dragging/resizing — which set styles every frame — stay instant.
+    function startCornerSnapAnim() {
+        if (prefersReducedMotion() || !playerElementRef) return;
+        endCornerSnapAnim();
+        playerElementRef.classList.add('eyv-corner-snapping');
+        const done = () => {
+            playerElementRef?.removeEventListener('transitionend', onSnapEnd);
+            if (cornerSnapTimeoutId) { clearTimeout(cornerSnapTimeoutId); cornerSnapTimeoutId = null; }
+            playerElementRef?.classList.remove('eyv-corner-snapping');
+        };
+        const onSnapEnd = (e) => { if (e.target === playerElementRef) done(); };
+        playerElementRef.addEventListener('transitionend', onSnapEnd);
+        cornerSnapTimeoutId = setTimeout(done, 320); // safety net
+    }
+
+    function endCornerSnapAnim() {
+        if (cornerSnapTimeoutId) { clearTimeout(cornerSnapTimeoutId); cornerSnapTimeoutId = null; }
+        playerElementRef?.classList.remove('eyv-corner-snapping');
     }
 
     function isAdPlaying() {
@@ -1681,8 +1768,14 @@
         if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
         if (DEBUG) console.log('[EYV DBG] Deactivating sticky mode.'); else console.log('[EYV] Deactivating sticky mode.');
 
+        // Scroll corner-mini only: capture where the mini is NOW (before it returns inline) so
+        // we can FLIP it back to full size after restoration. Top-pin teardown stays instant.
+        const cornerFlipFromRect = (stickyMode === 'corner' && playerElementRef?.isConnected && !prefersReducedMotion())
+            ? playerElementRef.getBoundingClientRect() : null;
+
         // Reset corner floating-mini state (scroll-stick) on any deactivation. Drag handlers
         // are gated on stickyMode, so resetting to 'top' disarms them automatically.
+        endCornerSnapAnim();
         if (playerElementRef) playerElementRef.classList.remove('eyv-player-corner');
         removeCornerResizeHandle();
         stickyMode = 'top';
@@ -1770,8 +1863,14 @@
             wasStickyBeforePiP = false;
             wasStickyBeforeOsFullscreen = false;
         }
+
+        // Now that the player is back in its inline spot and laid out, glide it from the
+        // corner-mini rect up to full size (scroll-back-home restore).
+        if (cornerFlipFromRect && playerElementRef?.isConnected) {
+            flipStickyTransition(playerElementRef, cornerFlipFromRect);
+        }
     }
-    
+
     // --- ATTACH VIDEO EVENT LISTENERS ---
     // Helper to attach listeners to the specific video element
     // This is called both during initialization and when video element is replaced (ads, quality changes)
@@ -2118,6 +2217,9 @@
                 // This ensures proper sizing regardless of view mode (default, theater, fullscreen)
                 // centerStickyPlayer also handles placeholder dimensions correctly (with constraints)
                 centerStickyPlayer(playerElement);
+                // Scroll corner-mini only: glide from the (inline) home rect into the corner.
+                // `rect` is the player's inline position captured above, before the move to body.
+                if (stickyMode === 'corner') flipStickyTransition(playerElement, rect);
                 // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
 
@@ -2912,6 +3014,11 @@
             .eyv-player-corner .html5-video-container,
             .eyv-player-corner video.html5-main-video {
                 cursor: move !important;
+            }
+            /* Drag-release snap glide: armed only for the one frame the snap is applied,
+               so live dragging/resizing (which set styles every frame) stay instant. */
+            .eyv-player-corner.eyv-corner-snapping {
+                transition: left 0.2s ease-out, top 0.2s ease-out, width 0.2s ease-out, height 0.2s ease-out !important;
             }
 
             /* Drag-to-resize grabber on the corner mini-player's inner corner: a small

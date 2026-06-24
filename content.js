@@ -983,7 +983,10 @@
         handle.style.top = onTop ? 'auto' : '0';
         handle.style.bottom = onTop ? '0' : 'auto';
         // Diagonal cursor matching the handle's corner (opposite the anchor).
-        handle.style.cursor = (cornerAnchor === 'br' || cornerAnchor === 'tl') ? 'nwse-resize' : 'nesw-resize';
+        const nwse = (cornerAnchor === 'br' || cornerAnchor === 'tl');
+        handle.style.cursor = nwse ? 'nwse-resize' : 'nesw-resize';
+        // The arrow icon is drawn along the NW-SE diagonal; mirror it for NE-SW corners.
+        handle.style.transform = nwse ? 'none' : 'scaleX(-1)';
     }
 
     function removeCornerResizeHandle() {
@@ -1808,6 +1811,14 @@
                 const isVideoEnded = videoElement.currentTime >= videoElement.duration - 0.5;
                 if (isVideoEnded) {
                     if (DEBUG) console.log("[EYV DBG] Paused because video ended (currentTime >= duration). Ignoring pause deactivation.");
+                    return;
+                }
+
+                // The scroll-stick corner mini exists to keep playing while you browse, so
+                // Pause Deactivation (meant for the top pin) must not tear it down on pause —
+                // otherwise it vanishes until the next scroll re-sticks it.
+                if (stickyMode === 'corner') {
+                    if (DEBUG) console.log("[EYV DBG] Paused in corner mini - keeping it shown (Pause Deactivation ignored).");
                     return;
                 }
 
@@ -2903,23 +2914,31 @@
                 cursor: move !important;
             }
 
-            /* Drag-to-resize grabber on the corner mini-player's inner corner. */
+            /* Drag-to-resize grabber on the corner mini-player's inner corner: a small
+               translucent chip with a diagonal double-arrow, revealed on hover. */
             #eyv-resize-handle {
                 position: absolute !important;
-                width: 20px !important;
-                height: 20px !important;
+                width: 26px !important;
+                height: 26px !important;
                 margin: 6px !important;
-                border-radius: 4px !important;
-                background-color: rgba(0,0,0,0.5) !important;
-                background-image: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(255,255,255,0.85) 3px 4px) !important;
-                box-shadow: 0 0 0 1px rgba(255,255,255,0.55) inset !important;
+                border-radius: 7px !important;
+                background-color: rgba(0,0,0,0.55) !important;
+                background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 7L17 17M7 7L7 12M7 7L12 7M17 17L17 12M17 17L12 17'/%3E%3C/svg%3E") !important;
+                background-repeat: no-repeat !important;
+                background-position: center !important;
+                background-size: 17px 17px !important;
+                box-shadow: 0 0 0 1px rgba(255,255,255,0.45) inset, 0 1px 3px rgba(0,0,0,0.4) !important;
                 opacity: 0 !important;
                 transition: opacity 0.15s ease !important;
                 pointer-events: auto !important;
                 z-index: 2147483647 !important;
             }
             .eyv-player-corner:hover #eyv-resize-handle {
+                opacity: 0.85 !important;
+            }
+            #eyv-resize-handle:hover {
                 opacity: 1 !important;
+                background-color: rgba(0,0,0,0.7) !important;
             }
 
             /* Snap-target highlight shown while dragging the corner mini-player. */

@@ -787,8 +787,8 @@
     // shell first (it appears earlier in document order), so init binds to a player
     // with no controls/video and waits out the full 15s controls timeout.
     function findActivePlayer() {
-        const players = document.querySelectorAll('ytd-player');
-        if (players.length <= 1) return players[0] || null;
+        const players = [...document.querySelectorAll('ytd-player')];
+        if (players.length === 0) return null;
         // Prefer the relocated sticky player if one is active
         for (const p of players) {
             if (p.classList.contains('eyv-player-fixed')) return p;
@@ -797,7 +797,16 @@
         for (const p of players) {
             if (p.querySelector('.html5-video-player') && p.querySelector('video.html5-main-video')) return p;
         }
-        return players[0];
+        // Never bind to YouTube's inline hover-preview player (#inline-player): on a
+        // watch page it's an empty shell, and in a background/hidden tab it can be
+        // created (or ordered) before the real #ytd-player is populated. Binding to
+        // it strands the extension — its controls never materialize, so init waits
+        // out the 15s timeout and dies. This is the intermittent "no controls in a
+        // middle-click-opened tab" bug. Fall back to the first NON-inline player; if
+        // only the inline shell exists so far, return null so the poller keeps
+        // waiting for the real player instead of binding to the dead one.
+        const mainPlayer = players.find(p => p.id !== 'inline-player');
+        return mainPlayer || null;
     }
 
     function getMastheadOffset() {
@@ -1231,41 +1240,58 @@
         // middle-click), YouTube defers building the player control bar and the
         // browser throttles timers, so the controls observer + 15s fallback can
         // give up before the controls exist. Without recovery the extension stays
-        // dead even after the tab is focused. This re-attempts the controls search
-        // once the tab becomes visible (and re-arms if it's still not ready).
-        let visibleRetryPending = false;
-        const scheduleControlsRetryWhenVisible = () => {
-            if (controlsInitialized || visibleRetryPending) return;
-            // Only meaningful while hidden; if visible and controls truly absent,
-            // it's a genuine failure, not a background-tab deferral.
-            if (document.visibilityState !== 'hidden') return;
-            visibleRetryPending = true;
-            const onVisible = () => {
-                if (document.visibilityState !== 'visible') return;
-                document.removeEventListener('visibilitychange', onVisible);
-                visibleRetryPending = false;
-                if (controlsInitialized || !player.isConnected) return;
-                const tryFindAndInit = () => {
-                    playerRightControls = player.querySelector('.ytp-right-controls');
-                    videoElement = player.querySelector('video.html5-main-video');
-                    progressBar = player.querySelector('.ytp-progress-bar-container');
-                    if (playerRightControls && videoElement && progressBar) {
-                        if (DEBUG) console.log('[EYV DBG] Controls found after tab became visible; initializing.');
-                        initializeControls();
-                        return true;
-                    }
-                    return false;
-                };
-                // Controls may need a moment to build after foregrounding; retry once.
-                if (!tryFindAndInit()) {
-                    const retryId = setTimeout(() => {
-                        if (controlsInitialized || !player.isConnected) return;
-                        if (!tryFindAndInit()) scheduleControlsRetryWhenVisible();
-                    }, 1000);
-                    cleanupRegistry.addTimeout(retryId);
+        // dead even after the tab is focused.
+        //
+        // Recovery: once a give-up has happened, poll for the controls WHENEVER the
+        // tab is visible, until they appear. A single check (or one delayed retry)
+        // is unreliable because the control-bar build finishes at a variable time
+        // around focus — that timing jitter is exactly why it worked "most of the
+        // time". Polling every 300ms while visible removes the race; the listener
+        // stays armed across hide/show cycles and self-removes once initialized.
+        let visibilityRetryArmed = false;
+        let controlsRetryPoll = null;
+        const stopControlsRetry = () => {
+            if (controlsRetryPoll) { clearInterval(controlsRetryPoll); controlsRetryPoll = null; }
+            if (visibilityRetryArmed) {
+                document.removeEventListener('visibilitychange', onVisibleRetry);
+                visibilityRetryArmed = false;
+            }
+        };
+        const pollForControlsWhileVisible = () => {
+            if (controlsInitialized || controlsRetryPoll) return;
+            if (document.visibilityState !== 'visible') return;
+            const startedAt = Date.now();
+            controlsRetryPoll = setInterval(() => {
+                if (controlsInitialized || !player.isConnected || document.visibilityState !== 'visible') {
+                    clearInterval(controlsRetryPoll); controlsRetryPoll = null; return;
                 }
-            };
-            cleanupRegistry.addListener(document, 'visibilitychange', onVisible);
+                playerRightControls = player.querySelector('.ytp-right-controls');
+                videoElement = player.querySelector('video.html5-main-video');
+                progressBar = player.querySelector('.ytp-progress-bar-container');
+                if (playerRightControls && videoElement && progressBar) {
+                    if (DEBUG) console.log('[EYV DBG] Controls found via visible-retry poll; initializing.');
+                    stopControlsRetry();
+                    initializeControls();
+                } else if (Date.now() - startedAt > 15000) {
+                    // Give up this poll but stay armed for a future focus/rebuild.
+                    clearInterval(controlsRetryPoll); controlsRetryPoll = null;
+                }
+            }, 300);
+            cleanupRegistry.addInterval(controlsRetryPoll);
+        };
+        function onVisibleRetry() {
+            if (controlsInitialized) { stopControlsRetry(); return; }
+            if (document.visibilityState === 'visible') pollForControlsWhileVisible();
+        }
+        const scheduleControlsRetryWhenVisible = () => {
+            if (controlsInitialized) return;
+            if (!visibilityRetryArmed) {
+                visibilityRetryArmed = true;
+                cleanupRegistry.addListener(document, 'visibilitychange', onVisibleRetry);
+            }
+            // If already visible (e.g. tab was focused at/just before give-up), the
+            // controls may simply have built late — start polling immediately.
+            pollForControlsWhileVisible();
         };
 
         // Check if controls are already present

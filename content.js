@@ -902,8 +902,16 @@
         if (!rect) return;
         const masthead = getMastheadOffset();
         const isSticky = stickyButtonElement.classList.contains('active');
-        const backHome = rect.top >= masthead - 2;       // home area scrolled back into view
-        const scrolledOut = rect.bottom < masthead + 8;  // inline player essentially gone
+        // Trigger off how much of the player's home area still shows below the top bar, as a
+        // FRACTION of its height (not a fixed pixel gap) so the feel is consistent across
+        // player sizes/views. Earlier these required the player to be fully past (to stick) or
+        // fully back at the top (to restore), which felt laggy in both directions.
+        // Hysteresis: pop to the corner once it's ~65% scrolled past; restore once it's ~60%
+        // back in view. The wide gap between the two thresholds prevents flicker at the edge.
+        const homeHeight = rect.height || 1;
+        const visibleBelowMasthead = rect.bottom - masthead;
+        const scrolledOut = visibleBelowMasthead < homeHeight * 0.35;  // going down: stick sooner
+        const backHome = visibleBelowMasthead > homeHeight * 0.6;      // going up: restore sooner
 
         if (backHome) scrollStickSuppressed = false;
 

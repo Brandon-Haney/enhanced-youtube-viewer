@@ -943,8 +943,14 @@
         let videoElement = player.querySelector('video.html5-main-video');
         let progressBar = player.querySelector('.ytp-progress-bar-container');
 
+        // Guard so initializeControls only ever wires buttons/listeners once,
+        // even if both the observer and a visibility retry race to call it.
+        let controlsInitialized = false;
+
         // Function to initialize when all controls are found
         const initializeControls = () => {
+            if (controlsInitialized) return;
+            controlsInitialized = true;
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
@@ -1221,6 +1227,47 @@
                 }
         }; // End of initializeControlsContinued
 
+        // When a watch page loads in a BACKGROUND/hidden tab (e.g. opened via
+        // middle-click), YouTube defers building the player control bar and the
+        // browser throttles timers, so the controls observer + 15s fallback can
+        // give up before the controls exist. Without recovery the extension stays
+        // dead even after the tab is focused. This re-attempts the controls search
+        // once the tab becomes visible (and re-arms if it's still not ready).
+        let visibleRetryPending = false;
+        const scheduleControlsRetryWhenVisible = () => {
+            if (controlsInitialized || visibleRetryPending) return;
+            // Only meaningful while hidden; if visible and controls truly absent,
+            // it's a genuine failure, not a background-tab deferral.
+            if (document.visibilityState !== 'hidden') return;
+            visibleRetryPending = true;
+            const onVisible = () => {
+                if (document.visibilityState !== 'visible') return;
+                document.removeEventListener('visibilitychange', onVisible);
+                visibleRetryPending = false;
+                if (controlsInitialized || !player.isConnected) return;
+                const tryFindAndInit = () => {
+                    playerRightControls = player.querySelector('.ytp-right-controls');
+                    videoElement = player.querySelector('video.html5-main-video');
+                    progressBar = player.querySelector('.ytp-progress-bar-container');
+                    if (playerRightControls && videoElement && progressBar) {
+                        if (DEBUG) console.log('[EYV DBG] Controls found after tab became visible; initializing.');
+                        initializeControls();
+                        return true;
+                    }
+                    return false;
+                };
+                // Controls may need a moment to build after foregrounding; retry once.
+                if (!tryFindAndInit()) {
+                    const retryId = setTimeout(() => {
+                        if (controlsInitialized || !player.isConnected) return;
+                        if (!tryFindAndInit()) scheduleControlsRetryWhenVisible();
+                    }, 1000);
+                    cleanupRegistry.addTimeout(retryId);
+                }
+            };
+            cleanupRegistry.addListener(document, 'visibilitychange', onVisible);
+        };
+
         // Check if controls are already present
         if (playerRightControls && videoElement && progressBar) {
             initializeControls();
@@ -1245,6 +1292,7 @@
                 } else if (controlsObserverAttempts >= MAX_CONTROLS_POLL_ATTEMPTS) {
                     controlsObserver.disconnect();
                     console.warn('[EYV] Failed to find player controls/video/progress bar after waiting.');
+                    scheduleControlsRetryWhenVisible();
                 }
             });
 
@@ -1270,6 +1318,7 @@
                         } else {
                             controlsObserver.disconnect();
                             console.warn('[EYV] Failed to find player controls even with fallback.');
+                            scheduleControlsRetryWhenVisible();
                         }
                     }
                 }, MAX_CONTROLS_POLL_ATTEMPTS * CONTROLS_POLL_INTERVAL_MS);

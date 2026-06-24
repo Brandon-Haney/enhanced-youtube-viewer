@@ -72,6 +72,8 @@
             if (snapPreview) snapPreview.remove();
             const resizeHandle = document.getElementById('eyv-resize-handle');
             if (resizeHandle) resizeHandle.remove();
+            const cornerTab = document.getElementById('eyv-corner-tab');
+            if (cornerTab) cornerTab.remove();
 
             // NOTE: We don't clean up the sticky player element here during navigation-start
             // because doing so would interfere with YouTube's miniplayer activation when
@@ -98,7 +100,9 @@
             stickyMode = 'top';
             pendingStickyMode = 'top';
             cornerDragState = null;
+            if (cornerDragRafId !== null) { cancelAnimationFrame(cornerDragRafId); cornerDragRafId = null; }
             cornerResizeState = null;
+            cornerTuck = null;
             suppressNextCornerClick = false;
             // Finalize any in-flight transition so a stuck transform/class can't survive nav.
             cancelStickyFlip();
@@ -470,6 +474,7 @@
     const CORNER_DEFAULT_WIDTH = 640; // Default width (px) of the scroll-stick mini-player (~2x the old 400)
     const CORNER_MIN_WIDTH = 240; // Smallest width (px) the user can shrink the mini-player to
     const CORNER_MARGIN = 16; // Gap (px) from the viewport edges for the corner mini-player
+    const CORNER_TUCK_FRACTION = 0.35; // Fraction of the mini past a side edge that triggers edge-tuck
 
     // --- GLOBAL VARIABLES & STATE ---
     let attempts = 0;
@@ -503,9 +508,16 @@
     let scrollStickRafId = null; // rAF throttle for the scroll-stick handler
     let stickyMode = 'top'; // Active sticky layout: 'top' (manual/auto-activate) or 'corner' (scroll-stick floating mini)
     let pendingStickyMode = 'top'; // Mode to apply on the NEXT activation (scroll-stick sets 'corner' before clicking)
-    let cornerAnchor = 'br'; // Remembered corner for the mini-player: 'tl' | 'tr' | 'bl' | 'br'
+    // Remembered resting place for the mini-player. Instead of only 4 corners, the mini docks
+    // to the nearest EDGE and keeps its position ALONG that edge (iPad-style): `edge` is which
+    // screen edge it sits against, `pos` is the 0..1 fraction of the player's CENTER along the
+    // cross-axis (vertical for left/right edges, horizontal for top/bottom). Persisted as
+    // stickyCornerDock; migrated from the legacy stickyCorner corner string.
+    let cornerDock = { edge: 'right', pos: 0.92 }; // default: right edge, near the bottom
+    let cornerTuck = null; // Edge-tuck state: 'left' | 'right' when collapsed to a tab, else null
     let cornerWidth = CORNER_DEFAULT_WIDTH; // Current mini-player width (px), persisted as stickyCornerWidth
     let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
+    let cornerDragRafId = null; // rAF handle coalescing drag updates to one paint per frame
     let cornerResizeState = null; // Bookkeeping for an in-progress corner-player resize
     let stickyFlipCleanup = null; // Finalizer for an in-flight FLIP transition (clears the temp transform)
     let stickyFlipTimeoutId = null; // Safety-net timer to end a FLIP if transitionend never fires
@@ -945,21 +957,77 @@
 
     // --- CORNER MINI-PLAYER (scroll-stick floating window: drag + snap-to-corner) ---
     // Compute the top/left for a mini-player of size w x h anchored to a corner.
-    function getCornerPosition(anchor, w, h, margin, mastheadOffset) {
+    const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    // Resting bounds for the mini's top-left given a w×h box and the masthead offset.
+    function getDockBounds(w, h, margin, mastheadOffset) {
         const topEdge = Math.max(margin, mastheadOffset + margin);
-        const left = anchor.includes('l')
-            ? margin
-            : Math.max(margin, window.innerWidth - w - margin);
-        const top = anchor.includes('t')
-            ? topEdge
-            : Math.max(topEdge, window.innerHeight - h - margin);
+        return {
+            minL: margin,
+            maxL: Math.max(margin, window.innerWidth - w - margin),
+            minT: topEdge,
+            maxT: Math.max(topEdge, window.innerHeight - h - margin)
+        };
+    }
+
+    // Resolve a {edge, pos} dock into a concrete {left, top} for a w×h box. The docked edge is
+    // pinned with a margin; the cross-axis position follows `pos` (center fraction), clamped so
+    // the box stays fully on-screen below the masthead.
+    function getDockPosition(dock, w, h, margin, mastheadOffset) {
+        const b = getDockBounds(w, h, margin, mastheadOffset);
+        let left, top;
+        if (dock.edge === 'left' || dock.edge === 'right') {
+            left = dock.edge === 'left' ? b.minL : b.maxL;
+            top = clampNum(dock.pos * window.innerHeight - h / 2, b.minT, b.maxT);
+        } else { // 'top' | 'bottom'
+            top = dock.edge === 'top' ? b.minT : b.maxT;
+            left = clampNum(dock.pos * window.innerWidth - w / 2, b.minL, b.maxL);
+        }
         return { left, top };
     }
 
-    function saveCornerAnchor(anchor) {
-        settingsCache.stickyCorner = anchor;
+    // Pick the nearest screen edge for a box and capture its position ALONG that edge so the
+    // mini settles against the closest edge wherever it was dropped — not just to a corner.
+    function nearestDockForRect(rect) {
+        const margin = CORNER_MARGIN;
+        const topEdge = Math.max(margin, getMastheadOffset() + margin);
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const distLeft = rect.left - margin;
+        const distRight = (window.innerWidth - margin) - rect.right;
+        const distTop = rect.top - topEdge;
+        const distBottom = (window.innerHeight - margin) - rect.bottom;
+        const min = Math.min(distLeft, distRight, distTop, distBottom);
+        if (min === distLeft) return { edge: 'left', pos: clampNum(cy / window.innerHeight, 0, 1) };
+        if (min === distRight) return { edge: 'right', pos: clampNum(cy / window.innerHeight, 0, 1) };
+        if (min === distTop) return { edge: 'top', pos: clampNum(cx / window.innerWidth, 0, 1) };
+        return { edge: 'bottom', pos: clampNum(cx / window.innerWidth, 0, 1) };
+    }
+
+    // For resize/handle placement we still need a concrete corner: the one ON the docked edge,
+    // toward whichever cross-axis half the box currently sits in. Returns 'tl'|'tr'|'bl'|'br'.
+    function dockToCorner(dock, rect) {
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        if (dock.edge === 'left' || dock.edge === 'right') {
+            return (cy < window.innerHeight / 2 ? 't' : 'b') + (dock.edge === 'left' ? 'l' : 'r');
+        }
+        return (dock.edge === 'top' ? 't' : 'b') + (cx < window.innerWidth / 2 ? 'l' : 'r');
+    }
+
+    // Map a legacy corner string ('tl'|'tr'|'bl'|'br') onto the edge-dock model: corners live on
+    // the side edges, near the top (pos~0.06) or bottom (pos~0.94).
+    function legacyCornerToDock(corner) {
+        const edge = corner.includes('l') ? 'left' : 'right';
+        const pos = corner.includes('t') ? 0.06 : 0.94;
+        return { edge, pos };
+    }
+
+    function saveDock(dock) {
+        cornerDock = dock;
+        settingsCache.stickyCornerDock = dock;
         if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
-            try { chrome.storage.local.set({ stickyCorner: anchor }); } catch (e) { /* context gone */ }
+            try { chrome.storage.local.set({ stickyCornerDock: dock }); } catch (e) { /* context gone */ }
         }
     }
 
@@ -990,14 +1058,17 @@
     function positionResizeHandle(handle) {
         handle = handle || playerElementRef?.querySelector('#eyv-resize-handle');
         if (!handle) return;
-        const onLeft = cornerAnchor.includes('l'); // anchor on left → handle on right
-        const onTop = cornerAnchor.includes('t');  // anchor on top → handle on bottom
+        // Derive the anchored corner from the current dock + box position; the handle sits on
+        // the diagonally OPPOSITE (interior) corner so dragging it grows toward screen center.
+        const anchorCorner = dockToCorner(cornerDock, playerElementRef.getBoundingClientRect());
+        const onLeft = anchorCorner.includes('l'); // anchor on left → handle on right
+        const onTop = anchorCorner.includes('t');  // anchor on top → handle on bottom
         handle.style.left = onLeft ? 'auto' : '0';
         handle.style.right = onLeft ? '0' : 'auto';
         handle.style.top = onTop ? 'auto' : '0';
         handle.style.bottom = onTop ? '0' : 'auto';
         // Diagonal cursor matching the handle's corner (opposite the anchor).
-        const nwse = (cornerAnchor === 'br' || cornerAnchor === 'tl');
+        const nwse = (anchorCorner === 'br' || anchorCorner === 'tl');
         handle.style.cursor = nwse ? 'nwse-resize' : 'nesw-resize';
         // The arrow icon is drawn along the NW-SE diagonal; mirror it for NE-SW corners.
         handle.style.transform = nwse ? 'none' : 'scaleX(-1)';
@@ -1007,15 +1078,19 @@
         playerElementRef?.querySelector('#eyv-resize-handle')?.remove();
     }
 
-    // Resize keeps the docked corner fixed (via getCornerPosition) and drives the box off the
-    // pointer's horizontal distance from that corner; height follows the live aspect ratio.
+    // Resize keeps the corner on the docked edge fixed and drives the box off the pointer's
+    // horizontal distance from that corner; height follows the live aspect ratio.
     function onCornerResizeMouseDown(e) {
         if (stickyMode !== 'corner' || e.button !== 0 || !playerElementRef) return;
         e.preventDefault();
         e.stopPropagation();
         const rect = playerElementRef.getBoundingClientRect();
+        // Pin the corner that's ON the docked edge; the box grows away from it toward center.
+        const corner = dockToCorner(cornerDock, rect);
         cornerResizeState = {
-            anchorX: cornerAnchor.includes('l') ? rect.left : rect.right,
+            corner,
+            anchorX: corner.includes('l') ? rect.left : rect.right,
+            anchorY: corner.includes('t') ? rect.top : rect.bottom,
             aspect: rect.width > 0 ? rect.height / rect.width : 9 / 16
         };
         document.addEventListener('mousemove', onCornerResizeMouseMove, true);
@@ -1025,16 +1100,18 @@
     function onCornerResizeMouseMove(e) {
         if (!cornerResizeState || !playerElementRef) return;
         e.preventDefault();
-        const aspect = cornerResizeState.aspect;
+        const { corner, anchorX, anchorY, aspect } = cornerResizeState;
         const maxW = window.innerWidth - CORNER_MARGIN * 2;
         const maxH = window.innerHeight - CORNER_MARGIN * 2;
-        let w = Math.abs(e.clientX - cornerResizeState.anchorX);
+        let w = Math.abs(e.clientX - anchorX);
         w = Math.max(CORNER_MIN_WIDTH, Math.min(maxW, w));
         let h = w * aspect;
         if (h > maxH) { h = maxH; w = h / aspect; }
         cornerWidth = w;
-        const pos = getCornerPosition(cornerAnchor, w, h, CORNER_MARGIN, getMastheadOffset());
-        Object.assign(playerElementRef.style, { width: `${w}px`, height: `${h}px`, left: `${pos.left}px`, top: `${pos.top}px` });
+        // Keep the pinned corner fixed; the box extends toward the interior from there.
+        const left = corner.includes('l') ? anchorX : anchorX - w;
+        const top = corner.includes('t') ? anchorY : anchorY - h;
+        Object.assign(playerElementRef.style, { width: `${w}px`, height: `${h}px`, left: `${left}px`, top: `${top}px` });
     }
 
     function onCornerResizeMouseUp(e) {
@@ -1043,6 +1120,11 @@
         if (!cornerResizeState) return;
         cornerResizeState = null;
         saveCornerWidth(cornerWidth);
+        // Re-derive the dock from the resized box so its remembered position stays in sync,
+        // then settle cleanly against the edge with the standard margin.
+        saveDock(nearestDockForRect(playerElementRef.getBoundingClientRect()));
+        startCornerSnapAnim();
+        centerStickyPlayer(playerElementRef);
     }
 
     // Drag is only live in corner mode. Initiating on the controls/buttons is ignored so
@@ -1053,7 +1135,9 @@
         if (e.target.closest('#eyv-resize-handle, .ytp-chrome-bottom, .ytp-chrome-controls, .ytp-progress-bar-container, .eyv-player-button, .eyv-pip-button, button, a, input')) return;
         endCornerSnapAnim(); // a fresh grab must be instant, never mid-snap-transition
         const rect = playerElementRef.getBoundingClientRect();
-        cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top, moved: false };
+        // Cache the box size once: it doesn't change while moving, so we never need to read
+        // layout again mid-drag (reading it after writing left/top forces a sync reflow → jank).
+        cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top, w: rect.width, h: rect.height, dx: 0, dy: 0, moved: false };
         document.addEventListener('mousemove', onCornerMouseMove, true);
         document.addEventListener('mouseup', onCornerMouseUp, true);
     }
@@ -1065,19 +1149,33 @@
         if (!cornerDragState.moved && Math.hypot(dx, dy) < 5) return; // below threshold: still a click
         cornerDragState.moved = true;
         e.preventDefault();
-        const w = playerElementRef.offsetWidth, h = playerElementRef.offsetHeight;
+        // Just record the latest offset; the actual DOM write happens once per frame in rAF so
+        // bursts of mousemove events coalesce into a single paint (smooth, no layout thrash).
+        cornerDragState.dx = dx;
+        cornerDragState.dy = dy;
+        if (cornerDragRafId === null) cornerDragRafId = requestAnimationFrame(applyCornerDrag);
+    }
+
+    function applyCornerDrag() {
+        cornerDragRafId = null;
+        if (!cornerDragState || !playerElementRef) return;
+        const { dx, dy, w, h } = cornerDragState;
         let left = cornerDragState.origLeft + dx;
         let top = cornerDragState.origTop + dy;
-        left = Math.max(0, Math.min(window.innerWidth - w, left));
+        // Allow the box to be dragged partly past the LEFT/RIGHT edges so it can be "flung off"
+        // to tuck into an edge tab; the vertical axis stays fully on-screen.
+        left = Math.max(-w * 0.6, Math.min(window.innerWidth - w * 0.4, left));
         top = Math.max(0, Math.min(window.innerHeight - h, top));
         playerElementRef.style.left = `${left}px`;
         playerElementRef.style.top = `${top}px`;
-        showSnapPreview(); // highlight the corner it will snap to on release
+        // Preview from the values we just wrote — no getBoundingClientRect read, no reflow.
+        showSnapPreview({ left, top, width: w, height: h, right: left + w, bottom: top + h });
     }
 
     function onCornerMouseUp(e) {
         document.removeEventListener('mousemove', onCornerMouseMove, true);
         document.removeEventListener('mouseup', onCornerMouseUp, true);
+        if (cornerDragRafId !== null) { cancelAnimationFrame(cornerDragRafId); cornerDragRafId = null; }
         hideSnapPreview();
         if (!cornerDragState) return;
         const dragged = cornerDragState.moved;
@@ -1085,10 +1183,16 @@
         if (!dragged || !playerElementRef) return; // a plain click: let YouTube handle it
         // Swallow the click that fires right after the drag so it doesn't toggle play.
         suppressNextCornerClick = true;
-        // Snap to the nearest corner based on the mini-player's center, then remember it.
-        cornerAnchor = nearestCornerForRect(playerElementRef.getBoundingClientRect());
-        saveCornerAnchor(cornerAnchor);
-        // Glide to the snapped corner: arm the position transition BEFORE centerStickyPlayer
+        const rect = playerElementRef.getBoundingClientRect();
+        const tuckSide = tuckSideForRect(rect);
+        if (tuckSide) {
+            // Flung off the left/right edge → collapse into an edge tab.
+            tuckCornerPlayer(tuckSide, rect);
+            return;
+        }
+        // Otherwise dock to the nearest EDGE, keeping the position along it, and remember it.
+        saveDock(nearestDockForRect(rect));
+        // Glide to the docked spot: arm the position transition BEFORE centerStickyPlayer
         // applies the new left/top so the change animates instead of jumping.
         startCornerSnapAnim();
         centerStickyPlayer(playerElementRef);
@@ -1102,29 +1206,103 @@
         }
     }
 
-    // While dragging, show a highlight outline at the corner the mini will snap to.
-    function nearestCornerForRect(rect) {
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        return (cy < window.innerHeight / 2 ? 't' : 'b') + (cx < window.innerWidth / 2 ? 'l' : 'r');
+    // Returns 'left'/'right' if the box is pushed far enough past that edge to tuck, else null.
+    // Tucking only applies to the side edges (iPad-style); ~35% of the box past the edge.
+    function tuckSideForRect(rect) {
+        const threshold = rect.width * CORNER_TUCK_FRACTION;
+        const offLeft = -rect.left;                       // amount past the left edge
+        const offRight = rect.right - window.innerWidth;  // amount past the right edge
+        if (offLeft > threshold && offLeft >= offRight) return 'left';
+        if (offRight > threshold) return 'right';
+        return null;
     }
 
-    function showSnapPreview() {
+    // While dragging, preview where the mini will settle: a full box outline at the edge it will
+    // dock to, or a thin strip on the edge it will tuck into. `rect` is supplied by the caller
+    // (computed from the styles just written) so we never force a reflow with getBoundingClientRect.
+    function showSnapPreview(rect) {
         if (!playerElementRef) return;
+        if (!rect) rect = playerElementRef.getBoundingClientRect();
         let preview = document.getElementById('eyv-snap-preview');
         if (!preview) {
             preview = document.createElement('div');
             preview.id = 'eyv-snap-preview';
             document.body.appendChild(preview);
         }
-        const w = playerElementRef.offsetWidth, h = playerElementRef.offsetHeight;
-        const anchor = nearestCornerForRect(playerElementRef.getBoundingClientRect());
-        const pos = getCornerPosition(anchor, w, h, CORNER_MARGIN, getMastheadOffset());
+        const tuckSide = tuckSideForRect(rect);
+        if (tuckSide) {
+            // Tuck preview: a slim vertical strip hugging the side it will collapse to.
+            const stripW = 8;
+            const left = tuckSide === 'left' ? 0 : window.innerWidth - stripW;
+            preview.classList.add('eyv-snap-preview-tuck');
+            Object.assign(preview.style, {
+                display: 'block', width: `${stripW}px`, height: `${rect.height}px`,
+                left: `${left}px`, top: `${Math.max(0, rect.top)}px`
+            });
+            return;
+        }
+        preview.classList.remove('eyv-snap-preview-tuck');
+        const w = rect.width, h = rect.height;
+        const pos = getDockPosition(nearestDockForRect(rect), w, h, CORNER_MARGIN, getMastheadOffset());
         Object.assign(preview.style, { display: 'block', width: `${w}px`, height: `${h}px`, left: `${pos.left}px`, top: `${pos.top}px` });
     }
 
     function hideSnapPreview() {
         document.getElementById('eyv-snap-preview')?.remove();
+    }
+
+    // --- EDGE-TUCK (collapse the mini into a side tab with a carat; tap the tab to restore) ---
+    // Tucking hides the player (kept playing, audio intact) and shows a small tab on the edge.
+    function tuckCornerPlayer(side, rect) {
+        if (!playerElementRef) return;
+        cornerTuck = side;
+        // Remember the edge + vertical position so restore returns it to roughly where it was.
+        const cy = rect.top + rect.height / 2;
+        saveDock({ edge: side, pos: clampNum(cy / window.innerHeight, 0, 1) });
+        removeCornerResizeHandle();
+        playerElementRef.classList.add('eyv-corner-tucked');
+        ensureCornerTab(side, cy);
+    }
+
+    function untuckCornerPlayer() {
+        if (!playerElementRef) return;
+        cornerTuck = null;
+        removeCornerTab();
+        playerElementRef.classList.remove('eyv-corner-tucked');
+        startCornerSnapAnim();
+        centerStickyPlayer(playerElementRef);
+    }
+
+    // The edge tab: a small rounded chip on the screen edge with a carat pointing inward.
+    function ensureCornerTab(side, centerY) {
+        let tab = document.getElementById('eyv-corner-tab');
+        if (!tab) {
+            tab = document.createElement('div');
+            tab.id = 'eyv-corner-tab';
+            tab.title = 'Show mini-player';
+            tab.addEventListener('click', onCornerTabClick, true);
+            document.body.appendChild(tab);
+        }
+        // Carat points toward screen center (› when tucked left, ‹ when tucked right).
+        tab.textContent = side === 'left' ? '›' : '‹';
+        tab.classList.toggle('eyv-corner-tab-left', side === 'left');
+        tab.classList.toggle('eyv-corner-tab-right', side === 'right');
+        const tabH = 64;
+        const top = clampNum((centerY || window.innerHeight / 2) - tabH / 2, 8, window.innerHeight - tabH - 8);
+        tab.style.top = `${top}px`;
+        tab.style.left = side === 'left' ? '0px' : 'auto';
+        tab.style.right = side === 'right' ? '0px' : 'auto';
+        return tab;
+    }
+
+    function removeCornerTab() {
+        document.getElementById('eyv-corner-tab')?.remove();
+    }
+
+    function onCornerTabClick(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        untuckCornerPlayer();
     }
 
     // --- TRANSITION POLISH (FLIP travel + drag-release snap glide) ---
@@ -1248,6 +1426,7 @@
         pipEnabled: null,
         stickyOnScroll: null,
         stickyCorner: null,
+        stickyCornerDock: null,
         stickyCornerWidth: null,
         loaded: false
     };
@@ -1353,14 +1532,19 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerWidth'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
                         inactiveWhenPausedEnabled = !!(settings && settings.inactiveWhenPaused);
                         inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
                         stickyOnScrollEnabled = !!(settings && settings.stickyOnScroll);
-                        if (settings && typeof settings.stickyCorner === 'string') cornerAnchor = settings.stickyCorner;
+                        // Prefer the new edge-dock; fall back to migrating the legacy corner string.
+                        if (settings && settings.stickyCornerDock && typeof settings.stickyCornerDock.edge === 'string') {
+                            cornerDock = { edge: settings.stickyCornerDock.edge, pos: clampNum(Number(settings.stickyCornerDock.pos) || 0.5, 0, 1) };
+                        } else if (settings && typeof settings.stickyCorner === 'string') {
+                            cornerDock = legacyCornerToDock(settings.stickyCorner);
+                        }
                         if (settings && typeof settings.stickyCornerWidth === 'number' && settings.stickyCornerWidth > 0) cornerWidth = settings.stickyCornerWidth;
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
@@ -1778,14 +1962,16 @@
 
         // Scroll corner-mini only: capture where the mini is NOW (before it returns inline) so
         // we can FLIP it back to full size after restoration. Top-pin teardown stays instant.
-        const cornerFlipFromRect = (stickyMode === 'corner' && playerElementRef?.isConnected && !prefersReducedMotion())
+        const cornerFlipFromRect = (stickyMode === 'corner' && !cornerTuck && playerElementRef?.isConnected && !prefersReducedMotion())
             ? playerElementRef.getBoundingClientRect() : null;
 
         // Reset corner floating-mini state (scroll-stick) on any deactivation. Drag handlers
         // are gated on stickyMode, so resetting to 'top' disarms them automatically.
         endCornerSnapAnim();
-        if (playerElementRef) playerElementRef.classList.remove('eyv-player-corner');
+        if (playerElementRef) playerElementRef.classList.remove('eyv-player-corner', 'eyv-corner-tucked');
         removeCornerResizeHandle();
+        removeCornerTab();
+        cornerTuck = null;
         stickyMode = 'top';
         cornerDragState = null;
         cornerResizeState = null;
@@ -2787,7 +2973,7 @@
             newH = newW * validAspectRatio;
             const maxMiniHeight = window.innerHeight - margin * 2;
             if (maxMiniHeight > 0 && newH > maxMiniHeight) { newH = maxMiniHeight; newW = newH / validAspectRatio; }
-            const pos = getCornerPosition(cornerAnchor, newW, newH, margin, mastheadOffset);
+            const pos = getDockPosition(cornerDock, newW, newH, margin, mastheadOffset);
             newL = pos.left; newTop = pos.top;
 
             if (!isFinite(newW) || !isFinite(newH) || newW <= 0 || newH <= 0) {
@@ -2795,6 +2981,13 @@
                 return;
             }
             Object.assign(fixedPlayer.style, { width: `${newW}px`, height: `${newH}px`, left: `${newL}px`, top: `${newTop}px`, transform: 'translateX(0%)' });
+
+            // While tucked, keep the player hidden behind its edge tab; just reposition the tab
+            // (e.g. on resize) and skip the resize grabber.
+            if (cornerTuck) {
+                ensureCornerTab(cornerTuck, newTop + newH / 2);
+                return;
+            }
 
             // Add/position the drag-to-resize grabber on the mini-player's inner corner.
             ensureCornerResizeHandle();
@@ -3067,6 +3260,60 @@
                 box-shadow: 0 0 0 2px rgba(0,0,0,0.35), 0 0 18px rgba(255,255,255,0.35) !important;
                 pointer-events: none !important;
                 transition: left 0.12s ease, top 0.12s ease !important;
+            }
+            /* Tuck preview: a slim glowing strip on the edge the mini will collapse into. */
+            #eyv-snap-preview.eyv-snap-preview-tuck {
+                border-radius: 6px !important;
+                background: rgba(255,255,255,0.85) !important;
+            }
+
+            /* Edge-tuck: hide the mini (it keeps playing) and show a tab to bring it back. */
+            .eyv-player-corner.eyv-corner-tucked {
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+            #eyv-corner-tab {
+                position: fixed !important;
+                width: 30px !important;
+                height: 72px !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                font-size: 26px !important;
+                font-weight: 800 !important;
+                line-height: 1 !important;
+                color: #fff !important;
+                /* Vivid YouTube-red so it stands out against the dark page. */
+                background-color: #ff0033 !important;
+                box-shadow: 0 0 0 2px rgba(255,255,255,0.35) inset, 0 2px 14px rgba(255,0,51,0.75) !important;
+                cursor: pointer !important;
+                z-index: 2147483647 !important;
+                opacity: 1 !important;
+                transition: background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease !important;
+                /* Gentle pulse to draw the eye to where the mini went. */
+                animation: eyv-tab-pulse 1.5s ease-in-out infinite !important;
+            }
+            #eyv-corner-tab:hover {
+                background-color: #ff1a4d !important;
+                transform: scale(1.08) !important;
+                animation: none !important;
+            }
+            #eyv-corner-tab.eyv-corner-tab-left {
+                border-radius: 0 12px 12px 0 !important;
+                padding-right: 3px !important;
+                transform-origin: left center !important;
+            }
+            #eyv-corner-tab.eyv-corner-tab-right {
+                border-radius: 12px 0 0 12px !important;
+                padding-left: 3px !important;
+                transform-origin: right center !important;
+            }
+            @keyframes eyv-tab-pulse {
+                0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.35) inset, 0 2px 12px rgba(255,0,51,0.65); }
+                50%      { box-shadow: 0 0 0 2px rgba(255,255,255,0.55) inset, 0 2px 22px rgba(255,0,51,1); }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                #eyv-corner-tab { animation: none !important; }
             }
 
             /* FIX: Removed '>' to select descendants, not just direct children */

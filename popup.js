@@ -13,13 +13,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const stickyPlayerCard = document.getElementById('stickyPlayerCard');
     const pipCard = document.getElementById('pipCard');
     const defaultStickyToggle = document.getElementById('defaultStickyToggle');
+    const stickyOnScrollToggle = document.getElementById('stickyOnScrollToggle');
     const inactiveWhenPausedToggle = document.getElementById('inactiveWhenPausedToggle');
     const inactiveAtEndToggle = document.getElementById('inactiveAtEndToggle');
     const versionText = document.getElementById('versionText');
     const saveIndicator = document.getElementById('saveIndicator');
 
     // Validate critical DOM elements exist
-    if (!stickyPlayerCard || !pipCard || !defaultStickyToggle || !inactiveWhenPausedToggle || !inactiveAtEndToggle) {
+    if (!stickyPlayerCard || !pipCard || !defaultStickyToggle || !stickyOnScrollToggle || !inactiveWhenPausedToggle || !inactiveAtEndToggle) {
         console.error('[EYV Popup] Critical DOM elements missing');
         return;
     }
@@ -84,6 +85,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Debounce timers for settings to prevent write race conditions
     let defaultStickyTimer = null;
+    let stickyOnScrollTimer = null;
     let inactiveWhenPausedTimer = null;
     let inactiveAtEndTimer = null;
 
@@ -157,6 +159,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 stickyPlayerEnabled: true,
                 pipEnabled: true,
                 defaultStickyEnabled: false,
+                stickyOnScroll: false,
                 inactiveWhenPaused: false,
                 inactiveAtEnd: false
             }, function(result) {
@@ -178,6 +181,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Initialize checkboxes first - independent of the action-card status spans, so a
         // missing status span never leaves the toggles displaying their HTML default.
         defaultStickyToggle.checked = result.defaultStickyEnabled;
+        stickyOnScrollToggle.checked = result.stickyOnScroll;
         inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
         inactiveAtEndToggle.checked = result.inactiveAtEnd;
 
@@ -297,6 +301,46 @@ document.addEventListener('DOMContentLoaded', function() {
                     showSaveConfirmation();
                     // Notify content script so it can immediately activate sticky if enabled
                     sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'defaultStickyEnabled', value: newValue });
+                })
+                .catch(error => {
+                    console.error('[EYV Popup] Storage error or timeout:', error);
+                    toggle.checked = !newValue; // Revert UI - the write failed
+                    if (error.message && error.message.includes('QUOTA')) {
+                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
+                    } else if (error.message && error.message.includes('timeout')) {
+                        showStatus('Storage operation timed out. Please try again.', true);
+                    }
+                });
+            }, DEBOUNCE_MS);
+        });
+    }
+
+    // Save preference when 'stickyOnScrollToggle' changes
+    if (stickyOnScrollToggle) {
+        stickyOnScrollToggle.addEventListener('change', function() {
+            const newValue = this.checked;
+            const toggle = this;
+
+            // Debounce to prevent rapid concurrent writes
+            if (stickyOnScrollTimer) clearTimeout(stickyOnScrollTimer);
+            stickyOnScrollTimer = setTimeout(() => {
+                storageWithTimeout(() => {
+                    return new Promise((resolve, reject) => {
+                        chrome.storage.local.set({stickyOnScroll: newValue}, () => {
+                            if (chrome.runtime.lastError) {
+                                reject(chrome.runtime.lastError);
+                            } else {
+                                resolve();
+                            }
+                        });
+                    });
+                })
+                .then(() => {
+                    // The write already succeeded; if the context is now gone, just skip
+                    // the follow-up message/indicator. Do NOT revert - the value is saved.
+                    if (!isChromeContextValid()) return;
+                    showSaveConfirmation();
+                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'stickyOnScroll', value: newValue });
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);

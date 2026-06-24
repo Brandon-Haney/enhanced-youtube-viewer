@@ -89,6 +89,8 @@
             wasStickyDuringCurrentVideo = false;
             isInitializing = false;
             isAutoPauseResumeActive = false;
+            stickyActivatedByScroll = false;
+            scrollStickSuppressed = false;
             originalPlayerParent = null;
             originalPlayerNextSibling = null;
 
@@ -102,6 +104,12 @@
             if (stickyRecalcRafId) {
                 cancelAnimationFrame(stickyRecalcRafId);
                 stickyRecalcRafId = null;
+            }
+
+            // Clear scroll-stick rAF ID
+            if (scrollStickRafId) {
+                cancelAnimationFrame(scrollStickRafId);
+                scrollStickRafId = null;
             }
 
             if (chatToggleRafId) {
@@ -469,6 +477,10 @@
     let wasStickyBeforeEnd = false; // Track if sticky was active when video ended
     let wasStickyDuringCurrentVideo = false; // Track if sticky was EVER active during current video playback
     let isAutoPauseResumeActive = false; // Flag to prevent interference with user pause/play
+    let stickyOnScrollEnabled = false; // Auto-stick the player when it scrolls out of view
+    let stickyActivatedByScroll = false; // Sticky was auto-activated by scroll (not manual / auto-on-load)
+    let scrollStickSuppressed = false; // User manually unstuck while scrolled down; wait until home to re-stick
+    let scrollStickRafId = null; // rAF throttle for the scroll-stick handler
     let delayedRecalcTimeouts = []; // Track delayed resize recalculation timeouts for cancellation
     let cachedButtonWidth = null; // Cached button dimensions for dynamic insertion
     let cachedButtonHeight = null;
@@ -516,6 +528,13 @@
                 } else if (message.key === 'inactiveAtEnd') {
                     inactiveAtEndEnabled = message.value;
                     settingsCache.inactiveAtEnd = message.value;
+                } else if (message.key === 'stickyOnScroll') {
+                    stickyOnScrollEnabled = message.value;
+                    settingsCache.stickyOnScroll = message.value;
+                    // Clear any leftover suppression and evaluate the current scroll
+                    // position so toggling on takes effect immediately.
+                    scrollStickSuppressed = false;
+                    if (message.value) handleScrollStick();
                 } else if (message.key === 'defaultStickyEnabled') {
                     settingsCache.defaultStickyEnabled = message.value;
 
@@ -817,6 +836,68 @@
         return 0;
     }
 
+    // --- SCROLL-TO-STICK (auto-activate sticky when the player scrolls out of view) ---
+    // Returns the top of the player's "home" area, stable whether stuck (the
+    // placeholder fills the spot) or unstuck (the player fills it).
+    function getScrollHomeTop() {
+        const stuck = stickyButtonElement?.classList.contains('active');
+        const marker = (stuck && playerPlaceholder?.isConnected) ? playerPlaceholder
+                     : (!stuck && playerElementRef?.isConnected) ? playerElementRef
+                     : document.querySelector('#player-container');
+        if (!marker) return null;
+        return marker.getBoundingClientRect().top;
+    }
+
+    // True once the player's home top has scrolled up under the masthead. The small
+    // buffer avoids sub-pixel triggering at the very top of the page (scrollY 0).
+    function isScrolledPastHome() {
+        const top = getScrollHomeTop();
+        return top != null && top < getMastheadOffset() - 2;
+    }
+
+    // Decide whether to auto-stick or auto-unstick based on scroll position.
+    function handleScrollStick() {
+        if (!stickyOnScrollEnabled) return;
+        if (window.location.pathname !== '/watch') return;
+        if (!stickyButtonElement || !playerElementRef?.isConnected) return;
+        // Default view only — in theater/fullscreen the player is already full-width,
+        // and the placeholder is hidden there, so home geometry isn't meaningful.
+        const ytdApp = document.querySelector('ytd-app');
+        const watchFlexy = document.querySelector('ytd-watch-flexy');
+        if (watchFlexy?.hasAttribute('theater') || ytdApp?.hasAttribute('fullscreen') || document.fullscreenElement) return;
+
+        const past = isScrolledPastHome();
+        const isSticky = stickyButtonElement.classList.contains('active');
+
+        if (past) {
+            // Scrolled below the player's top: stick it (unless the user just unstuck).
+            if (scrollStickSuppressed) return;
+            if (!isSticky) {
+                stickyActivatedByScroll = true;
+                stickyButtonElement.click(); // programmatic; conflict-guarded inside the handler
+                // If a conflicting mode (PiP/mini/fullscreen) blocked activation, drop the flag.
+                if (!stickyButtonElement.classList.contains('active')) stickyActivatedByScroll = false;
+            }
+        } else {
+            // Home is back in view: clear suppression and unstick if WE stuck it.
+            scrollStickSuppressed = false;
+            if (isSticky && stickyActivatedByScroll) {
+                stickyActivatedByScroll = false;
+                stickyButtonElement.click(); // programmatic deactivate
+            }
+        }
+    }
+
+    // rAF-throttled scroll handler; cheap no-op when the feature is off.
+    function onScrollStick() {
+        if (!stickyOnScrollEnabled) return;
+        if (scrollStickRafId) return;
+        scrollStickRafId = requestAnimationFrame(() => {
+            scrollStickRafId = null;
+            handleScrollStick();
+        });
+    }
+
     function isAdPlaying() {
         // Check if YouTube is currently playing an ad
         const player = document.querySelector('.html5-video-player');
@@ -859,6 +940,7 @@
         inactiveAtEnd: null,
         stickyPlayerEnabled: null,
         pipEnabled: null,
+        stickyOnScroll: null,
         loaded: false
     };
 
@@ -963,12 +1045,13 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
                         inactiveWhenPausedEnabled = !!(settings && settings.inactiveWhenPaused);
                         inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
+                        stickyOnScrollEnabled = !!(settings && settings.stickyOnScroll);
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
@@ -1234,6 +1317,12 @@
                         console.log('[EYV DBG] No auto-activation: conditions not met');
                     }
                 }
+
+                // Scroll-to-stick: listen always (cheap no-op when disabled) and evaluate
+                // the current scroll position once, so enabling it on an already-scrolled
+                // page (or reload while scrolled down) sticks immediately.
+                cleanupRegistry.addListener(window, 'scroll', onScrollStick, { passive: true });
+                handleScrollStick();
         }; // End of initializeControlsContinued
 
         // When a watch page loads in a BACKGROUND/hidden tab (e.g. opened via
@@ -1802,6 +1891,19 @@
                     if (DEBUG) console.log('[EYV DBG] ResizeObserver setup for smooth resizing');
                 }
             } else { deactivateStickyModeInternal(); }
+
+            // Scroll-stick bookkeeping. A genuine user click (event.isTrusted) overrides
+            // scroll automation: pinning manually means scroll-up won't auto-unpin it;
+            // unpinning manually while scrolled down suppresses scroll re-stick until the
+            // user scrolls back home. Programmatic .click() (auto-on-load, scroll-stick)
+            // has isTrusted === false and is handled by the scroll-stick flags directly.
+            if (event?.isTrusted) {
+                stickyActivatedByScroll = false;
+                const nowSticky = button.classList.contains('active');
+                if (!nowSticky && stickyOnScrollEnabled && isScrolledPastHome()) {
+                    scrollStickSuppressed = true;
+                }
+            }
             } catch (error) {
                 console.error('[EYV] Sticky button click error:', error);
                 isTransitioning = false; // Reset flag on error

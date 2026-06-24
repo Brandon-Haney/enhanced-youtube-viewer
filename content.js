@@ -70,6 +70,8 @@
             if (placeholder) placeholder.remove();
             const snapPreview = document.getElementById('eyv-snap-preview');
             if (snapPreview) snapPreview.remove();
+            const resizeHandle = document.getElementById('eyv-resize-handle');
+            if (resizeHandle) resizeHandle.remove();
 
             // NOTE: We don't clean up the sticky player element here during navigation-start
             // because doing so would interfere with YouTube's miniplayer activation when
@@ -96,10 +98,13 @@
             stickyMode = 'top';
             pendingStickyMode = 'top';
             cornerDragState = null;
+            cornerResizeState = null;
             suppressNextCornerClick = false;
-            // Remove any dangling drag listeners from an interrupted drag.
+            // Remove any dangling drag/resize listeners from an interrupted gesture.
             document.removeEventListener('mousemove', onCornerMouseMove, true);
             document.removeEventListener('mouseup', onCornerMouseUp, true);
+            document.removeEventListener('mousemove', onCornerResizeMouseMove, true);
+            document.removeEventListener('mouseup', onCornerResizeMouseUp, true);
             originalPlayerParent = null;
             originalPlayerNextSibling = null;
 
@@ -459,7 +464,8 @@
     const MAX_CONTROLS_POLL_ATTEMPTS = 30; // Give up after 15 seconds
     const BUTTON_TRANSITION_MS = 300; // Prevent rapid sticky button clicks
     const PIP_TRANSITION_MS = 500; // Prevent rapid PiP button clicks
-    const CORNER_WIDTH = 400; // Default width (px) of the scroll-stick floating mini-player
+    const CORNER_DEFAULT_WIDTH = 640; // Default width (px) of the scroll-stick mini-player (~2x the old 400)
+    const CORNER_MIN_WIDTH = 240; // Smallest width (px) the user can shrink the mini-player to
     const CORNER_MARGIN = 16; // Gap (px) from the viewport edges for the corner mini-player
 
     // --- GLOBAL VARIABLES & STATE ---
@@ -495,7 +501,9 @@
     let stickyMode = 'top'; // Active sticky layout: 'top' (manual/auto-activate) or 'corner' (scroll-stick floating mini)
     let pendingStickyMode = 'top'; // Mode to apply on the NEXT activation (scroll-stick sets 'corner' before clicking)
     let cornerAnchor = 'br'; // Remembered corner for the mini-player: 'tl' | 'tr' | 'bl' | 'br'
+    let cornerWidth = CORNER_DEFAULT_WIDTH; // Current mini-player width (px), persisted as stickyCornerWidth
     let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
+    let cornerResizeState = null; // Bookkeeping for an in-progress corner-player resize
     let suppressNextCornerClick = false; // Swallow the click event that ends a drag (so it doesn't toggle play)
     let lastInlinePlayerWidth = 0; // Player's inline size captured at activation (for the corner placeholder)
     let lastInlinePlayerHeight = 0; // Accurate for both default and theater, where width*aspect differs from actual
@@ -941,12 +949,91 @@
         }
     }
 
+    function saveCornerWidth(width) {
+        settingsCache.stickyCornerWidth = width;
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+            try { chrome.storage.local.set({ stickyCornerWidth: width }); } catch (e) { /* context gone */ }
+        }
+    }
+
+    // The resize grabber lives at the mini-player's INNER corner (diagonally opposite the
+    // anchored corner) so dragging it toward screen center grows the box while the docked
+    // corner stays put. Created on demand and repositioned whenever the anchor changes.
+    function ensureCornerResizeHandle() {
+        if (!playerElementRef) return null;
+        let handle = playerElementRef.querySelector('#eyv-resize-handle');
+        if (!handle) {
+            handle = document.createElement('div');
+            handle.id = 'eyv-resize-handle';
+            handle.title = 'Drag to resize';
+            handle.addEventListener('mousedown', onCornerResizeMouseDown, true);
+            playerElementRef.appendChild(handle);
+        }
+        positionResizeHandle(handle);
+        return handle;
+    }
+
+    function positionResizeHandle(handle) {
+        handle = handle || playerElementRef?.querySelector('#eyv-resize-handle');
+        if (!handle) return;
+        const onLeft = cornerAnchor.includes('l'); // anchor on left → handle on right
+        const onTop = cornerAnchor.includes('t');  // anchor on top → handle on bottom
+        handle.style.left = onLeft ? 'auto' : '0';
+        handle.style.right = onLeft ? '0' : 'auto';
+        handle.style.top = onTop ? 'auto' : '0';
+        handle.style.bottom = onTop ? '0' : 'auto';
+        // Diagonal cursor matching the handle's corner (opposite the anchor).
+        handle.style.cursor = (cornerAnchor === 'br' || cornerAnchor === 'tl') ? 'nwse-resize' : 'nesw-resize';
+    }
+
+    function removeCornerResizeHandle() {
+        playerElementRef?.querySelector('#eyv-resize-handle')?.remove();
+    }
+
+    // Resize keeps the docked corner fixed (via getCornerPosition) and drives the box off the
+    // pointer's horizontal distance from that corner; height follows the live aspect ratio.
+    function onCornerResizeMouseDown(e) {
+        if (stickyMode !== 'corner' || e.button !== 0 || !playerElementRef) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = playerElementRef.getBoundingClientRect();
+        cornerResizeState = {
+            anchorX: cornerAnchor.includes('l') ? rect.left : rect.right,
+            aspect: rect.width > 0 ? rect.height / rect.width : 9 / 16
+        };
+        document.addEventListener('mousemove', onCornerResizeMouseMove, true);
+        document.addEventListener('mouseup', onCornerResizeMouseUp, true);
+    }
+
+    function onCornerResizeMouseMove(e) {
+        if (!cornerResizeState || !playerElementRef) return;
+        e.preventDefault();
+        const aspect = cornerResizeState.aspect;
+        const maxW = window.innerWidth - CORNER_MARGIN * 2;
+        const maxH = window.innerHeight - CORNER_MARGIN * 2;
+        let w = Math.abs(e.clientX - cornerResizeState.anchorX);
+        w = Math.max(CORNER_MIN_WIDTH, Math.min(maxW, w));
+        let h = w * aspect;
+        if (h > maxH) { h = maxH; w = h / aspect; }
+        cornerWidth = w;
+        const pos = getCornerPosition(cornerAnchor, w, h, CORNER_MARGIN, getMastheadOffset());
+        Object.assign(playerElementRef.style, { width: `${w}px`, height: `${h}px`, left: `${pos.left}px`, top: `${pos.top}px` });
+    }
+
+    function onCornerResizeMouseUp(e) {
+        document.removeEventListener('mousemove', onCornerResizeMouseMove, true);
+        document.removeEventListener('mouseup', onCornerResizeMouseUp, true);
+        if (!cornerResizeState) return;
+        cornerResizeState = null;
+        saveCornerWidth(cornerWidth);
+    }
+
     // Drag is only live in corner mode. Initiating on the controls/buttons is ignored so
     // scrubbing and the OSD buttons still work; a movement threshold distinguishes a drag
     // from a click (which YouTube uses to toggle play).
     function onCornerMouseDown(e) {
         if (stickyMode !== 'corner' || e.button !== 0 || !playerElementRef) return;
-        if (e.target.closest('.ytp-chrome-bottom, .ytp-chrome-controls, .ytp-progress-bar-container, .eyv-player-button, .eyv-pip-button, button, a, input')) return;
+        if (e.target.closest('#eyv-resize-handle, .ytp-chrome-bottom, .ytp-chrome-controls, .ytp-progress-bar-container, .eyv-player-button, .eyv-pip-button, button, a, input')) return;
         const rect = playerElementRef.getBoundingClientRect();
         cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top, moved: false };
         document.addEventListener('mousemove', onCornerMouseMove, true);
@@ -1063,6 +1150,7 @@
         pipEnabled: null,
         stickyOnScroll: null,
         stickyCorner: null,
+        stickyCornerWidth: null,
         loaded: false
     };
 
@@ -1167,7 +1255,7 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerWidth'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
@@ -1175,6 +1263,7 @@
                         inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
                         stickyOnScrollEnabled = !!(settings && settings.stickyOnScroll);
                         if (settings && typeof settings.stickyCorner === 'string') cornerAnchor = settings.stickyCorner;
+                        if (settings && typeof settings.stickyCornerWidth === 'number' && settings.stickyCornerWidth > 0) cornerWidth = settings.stickyCornerWidth;
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
@@ -1592,8 +1681,10 @@
         // Reset corner floating-mini state (scroll-stick) on any deactivation. Drag handlers
         // are gated on stickyMode, so resetting to 'top' disarms them automatically.
         if (playerElementRef) playerElementRef.classList.remove('eyv-player-corner');
+        removeCornerResizeHandle();
         stickyMode = 'top';
         cornerDragState = null;
+        cornerResizeState = null;
         if (playerElementRef) {
             // Restore player to original DOM position (moved to body during activation)
             if (originalPlayerParent && originalPlayerParent.isConnected) {
@@ -2569,7 +2660,9 @@
         // up returns the player without a layout jump.
         if (stickyMode === 'corner') {
             const margin = CORNER_MARGIN;
-            newW = Math.min(CORNER_WIDTH, Math.max(200, window.innerWidth - margin * 2));
+            // Use the user's chosen width (drag-to-resize), clamped to the viewport.
+            const desiredW = (isFinite(cornerWidth) && cornerWidth > 0) ? cornerWidth : CORNER_DEFAULT_WIDTH;
+            newW = Math.min(desiredW, Math.max(CORNER_MIN_WIDTH, window.innerWidth - margin * 2));
             newH = newW * validAspectRatio;
             const maxMiniHeight = window.innerHeight - margin * 2;
             if (maxMiniHeight > 0 && newH > maxMiniHeight) { newH = maxMiniHeight; newW = newH / validAspectRatio; }
@@ -2581,6 +2674,9 @@
                 return;
             }
             Object.assign(fixedPlayer.style, { width: `${newW}px`, height: `${newH}px`, left: `${newL}px`, top: `${newTop}px`, transform: 'translateX(0%)' });
+
+            // Add/position the drag-to-resize grabber on the mini-player's inner corner.
+            ensureCornerResizeHandle();
 
             // Keep the placeholder at the player's ORIGINAL inline size (not the mini size)
             // so the page layout and scroll position are preserved while the mini floats.
@@ -2807,6 +2903,25 @@
                 cursor: move !important;
             }
 
+            /* Drag-to-resize grabber on the corner mini-player's inner corner. */
+            #eyv-resize-handle {
+                position: absolute !important;
+                width: 20px !important;
+                height: 20px !important;
+                margin: 6px !important;
+                border-radius: 4px !important;
+                background-color: rgba(0,0,0,0.5) !important;
+                background-image: repeating-linear-gradient(-45deg, transparent 0 3px, rgba(255,255,255,0.85) 3px 4px) !important;
+                box-shadow: 0 0 0 1px rgba(255,255,255,0.55) inset !important;
+                opacity: 0 !important;
+                transition: opacity 0.15s ease !important;
+                pointer-events: auto !important;
+                z-index: 2147483647 !important;
+            }
+            .eyv-player-corner:hover #eyv-resize-handle {
+                opacity: 1 !important;
+            }
+
             /* Snap-target highlight shown while dragging the corner mini-player. */
             #eyv-snap-preview {
                 position: fixed !important;
@@ -2822,7 +2937,7 @@
 
             /* FIX: Removed '>' to select descendants, not just direct children */
             /* FIX: Add #container and direct child div to the allow-list for click-through */
-            .eyv-player-fixed > div,
+            .eyv-player-fixed > div:not(#eyv-resize-handle),
             .eyv-player-fixed #container,
             .eyv-player-fixed #movie_player,
             .eyv-player-fixed .html5-video-player {

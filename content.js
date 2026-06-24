@@ -68,6 +68,8 @@
             document.querySelectorAll('.eyv-player-button, .eyv-pip-button').forEach(btn => btn.remove());
             const placeholder = document.getElementById('eyv-player-placeholder');
             if (placeholder) placeholder.remove();
+            const snapPreview = document.getElementById('eyv-snap-preview');
+            if (snapPreview) snapPreview.remove();
 
             // NOTE: We don't clean up the sticky player element here during navigation-start
             // because doing so would interfere with YouTube's miniplayer activation when
@@ -495,6 +497,8 @@
     let cornerAnchor = 'br'; // Remembered corner for the mini-player: 'tl' | 'tr' | 'bl' | 'br'
     let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
     let suppressNextCornerClick = false; // Swallow the click event that ends a drag (so it doesn't toggle play)
+    let lastInlinePlayerWidth = 0; // Player's inline size captured at activation (for the corner placeholder)
+    let lastInlinePlayerHeight = 0; // Accurate for both default and theater, where width*aspect differs from actual
     let delayedRecalcTimeouts = []; // Track delayed resize recalculation timeouts for cancellation
     let cachedButtonWidth = null; // Cached button dimensions for dynamic insertion
     let cachedButtonHeight = null;
@@ -875,10 +879,10 @@
         if (!stickyOnScrollEnabled) return;
         if (window.location.pathname !== '/watch') return;
         if (!stickyButtonElement || !playerElementRef?.isConnected) return;
-        // Default view only — in theater/fullscreen the player is already full-width.
+        // Works in default AND theater view (both scroll). Excluded only in fullscreen,
+        // where the page doesn't scroll and the player owns the whole screen.
         const ytdApp = document.querySelector('ytd-app');
-        const watchFlexy = document.querySelector('ytd-watch-flexy');
-        if (watchFlexy?.hasAttribute('theater') || ytdApp?.hasAttribute('fullscreen') || document.fullscreenElement) return;
+        if (ytdApp?.hasAttribute('fullscreen') || document.fullscreenElement) return;
 
         const rect = getScrollHomeRect();
         if (!rect) return;
@@ -963,11 +967,13 @@
         top = Math.max(0, Math.min(window.innerHeight - h, top));
         playerElementRef.style.left = `${left}px`;
         playerElementRef.style.top = `${top}px`;
+        showSnapPreview(); // highlight the corner it will snap to on release
     }
 
     function onCornerMouseUp(e) {
         document.removeEventListener('mousemove', onCornerMouseMove, true);
         document.removeEventListener('mouseup', onCornerMouseUp, true);
+        hideSnapPreview();
         if (!cornerDragState) return;
         const dragged = cornerDragState.moved;
         cornerDragState = null;
@@ -975,10 +981,7 @@
         // Swallow the click that fires right after the drag so it doesn't toggle play.
         suppressNextCornerClick = true;
         // Snap to the nearest corner based on the mini-player's center, then remember it.
-        const rect = playerElementRef.getBoundingClientRect();
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        cornerAnchor = (cy < window.innerHeight / 2 ? 't' : 'b') + (cx < window.innerWidth / 2 ? 'l' : 'r');
+        cornerAnchor = nearestCornerForRect(playerElementRef.getBoundingClientRect());
         saveCornerAnchor(cornerAnchor);
         centerStickyPlayer(playerElementRef);
     }
@@ -989,6 +992,31 @@
             e.preventDefault();
             e.stopPropagation();
         }
+    }
+
+    // While dragging, show a highlight outline at the corner the mini will snap to.
+    function nearestCornerForRect(rect) {
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        return (cy < window.innerHeight / 2 ? 't' : 'b') + (cx < window.innerWidth / 2 ? 'l' : 'r');
+    }
+
+    function showSnapPreview() {
+        if (!playerElementRef) return;
+        let preview = document.getElementById('eyv-snap-preview');
+        if (!preview) {
+            preview = document.createElement('div');
+            preview.id = 'eyv-snap-preview';
+            document.body.appendChild(preview);
+        }
+        const w = playerElementRef.offsetWidth, h = playerElementRef.offsetHeight;
+        const anchor = nearestCornerForRect(playerElementRef.getBoundingClientRect());
+        const pos = getCornerPosition(anchor, w, h, CORNER_MARGIN, getMastheadOffset());
+        Object.assign(preview.style, { display: 'block', width: `${w}px`, height: `${h}px`, left: `${pos.left}px`, top: `${pos.top}px` });
+    }
+
+    function hideSnapPreview() {
+        document.getElementById('eyv-snap-preview')?.remove();
     }
 
     function isAdPlaying() {
@@ -1921,6 +1949,12 @@
                 const rect = playerElement.getBoundingClientRect();
                 const initialWidth = rect.width; const initialHeight = rect.height;
                 const initialLeft = rect.left; const initialTop = rect.top;
+                // Remember the inline size for the corner-mode placeholder (accurate in
+                // theater, where the actual height differs from width * aspect).
+                if (initialWidth > 0 && initialHeight > 0) {
+                    lastInlinePlayerWidth = initialWidth;
+                    lastInlinePlayerHeight = initialHeight;
+                }
                 if (DEBUG) console.log(`[EYV DBG Click] Player dimensions: ${initialWidth}x${initialHeight} at (${initialLeft},${initialTop})`);
 
                 if (initialHeight === 0 || initialWidth === 0) {
@@ -2550,14 +2584,21 @@
 
             // Keep the placeholder at the player's ORIGINAL inline size (not the mini size)
             // so the page layout and scroll position are preserved while the mini floats.
+            // Prefer the size captured at activation (accurate in theater, where the actual
+            // player height differs from width * aspect); fall back to the primary column.
             const cornerPlaceholder = document.getElementById('eyv-player-placeholder');
             if (cornerPlaceholder && cornerPlaceholder.isConnected) {
-                const primaryColForPh = document.querySelector('#primary.ytd-watch-flexy');
-                let inlineW = primaryColForPh ? primaryColForPh.getBoundingClientRect().width : newW;
-                if (!isFinite(inlineW) || inlineW <= 0) inlineW = parseFloat(cornerPlaceholder.style.width) || newW;
+                let inlineW = lastInlinePlayerWidth;
+                let inlineH = lastInlinePlayerHeight;
+                if (!(inlineW > 0 && inlineH > 0)) {
+                    const primaryColForPh = document.querySelector('#primary.ytd-watch-flexy');
+                    inlineW = primaryColForPh ? primaryColForPh.getBoundingClientRect().width : newW;
+                    if (!isFinite(inlineW) || inlineW <= 0) inlineW = parseFloat(cornerPlaceholder.style.width) || newW;
+                    inlineH = inlineW * validAspectRatio;
+                }
                 cornerPlaceholder.style.display = 'block';
                 cornerPlaceholder.style.width = `${inlineW}px`;
-                cornerPlaceholder.style.height = `${inlineW * validAspectRatio}px`;
+                cornerPlaceholder.style.height = `${inlineH}px`;
             }
         } else {
         const watchFlexy = document.querySelector('ytd-watch-flexy');
@@ -2764,6 +2805,19 @@
             .eyv-player-corner .html5-video-container,
             .eyv-player-corner video.html5-main-video {
                 cursor: move !important;
+            }
+
+            /* Snap-target highlight shown while dragging the corner mini-player. */
+            #eyv-snap-preview {
+                position: fixed !important;
+                z-index: ${zIndex - 1} !important;
+                box-sizing: border-box !important;
+                border: 3px solid rgba(255,255,255,0.95) !important;
+                border-radius: 12px !important;
+                background: rgba(255,255,255,0.14) !important;
+                box-shadow: 0 0 0 2px rgba(0,0,0,0.35), 0 0 18px rgba(255,255,255,0.35) !important;
+                pointer-events: none !important;
+                transition: left 0.12s ease, top 0.12s ease !important;
             }
 
             /* FIX: Removed '>' to select descendants, not just direct children */

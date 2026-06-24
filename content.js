@@ -91,6 +91,13 @@
             isAutoPauseResumeActive = false;
             stickyActivatedByScroll = false;
             scrollStickSuppressed = false;
+            stickyMode = 'top';
+            pendingStickyMode = 'top';
+            cornerDragState = null;
+            suppressNextCornerClick = false;
+            // Remove any dangling drag listeners from an interrupted drag.
+            document.removeEventListener('mousemove', onCornerMouseMove, true);
+            document.removeEventListener('mouseup', onCornerMouseUp, true);
             originalPlayerParent = null;
             originalPlayerNextSibling = null;
 
@@ -450,6 +457,8 @@
     const MAX_CONTROLS_POLL_ATTEMPTS = 30; // Give up after 15 seconds
     const BUTTON_TRANSITION_MS = 300; // Prevent rapid sticky button clicks
     const PIP_TRANSITION_MS = 500; // Prevent rapid PiP button clicks
+    const CORNER_WIDTH = 400; // Default width (px) of the scroll-stick floating mini-player
+    const CORNER_MARGIN = 16; // Gap (px) from the viewport edges for the corner mini-player
 
     // --- GLOBAL VARIABLES & STATE ---
     let attempts = 0;
@@ -481,6 +490,11 @@
     let stickyActivatedByScroll = false; // Sticky was auto-activated by scroll (not manual / auto-on-load)
     let scrollStickSuppressed = false; // User manually unstuck while scrolled down; wait until home to re-stick
     let scrollStickRafId = null; // rAF throttle for the scroll-stick handler
+    let stickyMode = 'top'; // Active sticky layout: 'top' (manual/auto-activate) or 'corner' (scroll-stick floating mini)
+    let pendingStickyMode = 'top'; // Mode to apply on the NEXT activation (scroll-stick sets 'corner' before clicking)
+    let cornerAnchor = 'br'; // Remembered corner for the mini-player: 'tl' | 'tr' | 'bl' | 'br'
+    let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
+    let suppressNextCornerClick = false; // Swallow the click event that ends a drag (so it doesn't toggle play)
     let delayedRecalcTimeouts = []; // Track delayed resize recalculation timeouts for cancellation
     let cachedButtonWidth = null; // Cached button dimensions for dynamic insertion
     let cachedButtonHeight = null;
@@ -836,55 +850,60 @@
         return 0;
     }
 
-    // --- SCROLL-TO-STICK (auto-activate sticky when the player scrolls out of view) ---
-    // Returns the top of the player's "home" area, stable whether stuck (the
-    // placeholder fills the spot) or unstuck (the player fills it).
-    function getScrollHomeTop() {
+    // --- SCROLL-TO-STICK (shrink the player into a floating corner mini on scroll) ---
+    // The player's "home" area rect, stable whether stuck (the placeholder fills the
+    // spot at the original inline size) or unstuck (the player fills it).
+    function getScrollHomeRect() {
         const stuck = stickyButtonElement?.classList.contains('active');
         const marker = (stuck && playerPlaceholder?.isConnected) ? playerPlaceholder
                      : (!stuck && playerElementRef?.isConnected) ? playerElementRef
                      : document.querySelector('#player-container');
-        if (!marker) return null;
-        return marker.getBoundingClientRect().top;
+        return marker ? marker.getBoundingClientRect() : null;
     }
 
-    // True once the player's home top has scrolled up under the masthead. The small
-    // buffer avoids sub-pixel triggering at the very top of the page (scrollY 0).
+    // For manual-unpin suppression: is the player's home scrolled up off the top?
     function isScrolledPastHome() {
-        const top = getScrollHomeTop();
-        return top != null && top < getMastheadOffset() - 2;
+        const rect = getScrollHomeRect();
+        return rect != null && rect.top < getMastheadOffset() - 2;
     }
 
-    // Decide whether to auto-stick or auto-unstick based on scroll position.
+    // Decide whether to pop the mini to a corner or restore it inline, based on scroll.
+    // Hysteresis: activate only once the inline player is essentially scrolled out
+    // (its bottom passes under the masthead); deactivate once the home area scrolls
+    // back near the top. The gap between the two thresholds prevents flicker.
     function handleScrollStick() {
         if (!stickyOnScrollEnabled) return;
         if (window.location.pathname !== '/watch') return;
         if (!stickyButtonElement || !playerElementRef?.isConnected) return;
-        // Default view only — in theater/fullscreen the player is already full-width,
-        // and the placeholder is hidden there, so home geometry isn't meaningful.
+        // Default view only — in theater/fullscreen the player is already full-width.
         const ytdApp = document.querySelector('ytd-app');
         const watchFlexy = document.querySelector('ytd-watch-flexy');
         if (watchFlexy?.hasAttribute('theater') || ytdApp?.hasAttribute('fullscreen') || document.fullscreenElement) return;
 
-        const past = isScrolledPastHome();
+        const rect = getScrollHomeRect();
+        if (!rect) return;
+        const masthead = getMastheadOffset();
         const isSticky = stickyButtonElement.classList.contains('active');
+        const backHome = rect.top >= masthead - 2;       // home area scrolled back into view
+        const scrolledOut = rect.bottom < masthead + 8;  // inline player essentially gone
 
-        if (past) {
-            // Scrolled below the player's top: stick it (unless the user just unstuck).
-            if (scrollStickSuppressed) return;
-            if (!isSticky) {
+        if (backHome) scrollStickSuppressed = false;
+
+        if (!isSticky) {
+            if (scrolledOut && !scrollStickSuppressed) {
+                pendingStickyMode = 'corner'; // scroll-stick uses the floating corner mini
                 stickyActivatedByScroll = true;
                 stickyButtonElement.click(); // programmatic; conflict-guarded inside the handler
-                // If a conflicting mode (PiP/mini/fullscreen) blocked activation, drop the flag.
-                if (!stickyButtonElement.classList.contains('active')) stickyActivatedByScroll = false;
+                // If a conflicting mode (PiP/mini/fullscreen) blocked activation, drop the flags.
+                if (!stickyButtonElement.classList.contains('active')) {
+                    stickyActivatedByScroll = false;
+                    pendingStickyMode = 'top';
+                }
             }
-        } else {
-            // Home is back in view: clear suppression and unstick if WE stuck it.
-            scrollStickSuppressed = false;
-            if (isSticky && stickyActivatedByScroll) {
-                stickyActivatedByScroll = false;
-                stickyButtonElement.click(); // programmatic deactivate
-            }
+        } else if (backHome && stickyActivatedByScroll) {
+            // Restore inline once scrolled back home, but only if WE auto-stuck it.
+            stickyActivatedByScroll = false;
+            stickyButtonElement.click(); // programmatic deactivate
         }
     }
 
@@ -896,6 +915,80 @@
             scrollStickRafId = null;
             handleScrollStick();
         });
+    }
+
+    // --- CORNER MINI-PLAYER (scroll-stick floating window: drag + snap-to-corner) ---
+    // Compute the top/left for a mini-player of size w x h anchored to a corner.
+    function getCornerPosition(anchor, w, h, margin, mastheadOffset) {
+        const topEdge = Math.max(margin, mastheadOffset + margin);
+        const left = anchor.includes('l')
+            ? margin
+            : Math.max(margin, window.innerWidth - w - margin);
+        const top = anchor.includes('t')
+            ? topEdge
+            : Math.max(topEdge, window.innerHeight - h - margin);
+        return { left, top };
+    }
+
+    function saveCornerAnchor(anchor) {
+        settingsCache.stickyCorner = anchor;
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+            try { chrome.storage.local.set({ stickyCorner: anchor }); } catch (e) { /* context gone */ }
+        }
+    }
+
+    // Drag is only live in corner mode. Initiating on the controls/buttons is ignored so
+    // scrubbing and the OSD buttons still work; a movement threshold distinguishes a drag
+    // from a click (which YouTube uses to toggle play).
+    function onCornerMouseDown(e) {
+        if (stickyMode !== 'corner' || e.button !== 0 || !playerElementRef) return;
+        if (e.target.closest('.ytp-chrome-bottom, .ytp-chrome-controls, .ytp-progress-bar-container, .eyv-player-button, .eyv-pip-button, button, a, input')) return;
+        const rect = playerElementRef.getBoundingClientRect();
+        cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top, moved: false };
+        document.addEventListener('mousemove', onCornerMouseMove, true);
+        document.addEventListener('mouseup', onCornerMouseUp, true);
+    }
+
+    function onCornerMouseMove(e) {
+        if (!cornerDragState || !playerElementRef) return;
+        const dx = e.clientX - cornerDragState.startX;
+        const dy = e.clientY - cornerDragState.startY;
+        if (!cornerDragState.moved && Math.hypot(dx, dy) < 5) return; // below threshold: still a click
+        cornerDragState.moved = true;
+        e.preventDefault();
+        const w = playerElementRef.offsetWidth, h = playerElementRef.offsetHeight;
+        let left = cornerDragState.origLeft + dx;
+        let top = cornerDragState.origTop + dy;
+        left = Math.max(0, Math.min(window.innerWidth - w, left));
+        top = Math.max(0, Math.min(window.innerHeight - h, top));
+        playerElementRef.style.left = `${left}px`;
+        playerElementRef.style.top = `${top}px`;
+    }
+
+    function onCornerMouseUp(e) {
+        document.removeEventListener('mousemove', onCornerMouseMove, true);
+        document.removeEventListener('mouseup', onCornerMouseUp, true);
+        if (!cornerDragState) return;
+        const dragged = cornerDragState.moved;
+        cornerDragState = null;
+        if (!dragged || !playerElementRef) return; // a plain click: let YouTube handle it
+        // Swallow the click that fires right after the drag so it doesn't toggle play.
+        suppressNextCornerClick = true;
+        // Snap to the nearest corner based on the mini-player's center, then remember it.
+        const rect = playerElementRef.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        cornerAnchor = (cy < window.innerHeight / 2 ? 't' : 'b') + (cx < window.innerWidth / 2 ? 'l' : 'r');
+        saveCornerAnchor(cornerAnchor);
+        centerStickyPlayer(playerElementRef);
+    }
+
+    function onCornerClickCapture(e) {
+        if (suppressNextCornerClick) {
+            suppressNextCornerClick = false;
+            e.preventDefault();
+            e.stopPropagation();
+        }
     }
 
     function isAdPlaying() {
@@ -941,6 +1034,7 @@
         stickyPlayerEnabled: null,
         pipEnabled: null,
         stickyOnScroll: null,
+        stickyCorner: null,
         loaded: false
     };
 
@@ -1045,13 +1139,14 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
                         inactiveWhenPausedEnabled = !!(settings && settings.inactiveWhenPaused);
                         inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
                         stickyOnScrollEnabled = !!(settings && settings.stickyOnScroll);
+                        if (settings && typeof settings.stickyCorner === 'string') cornerAnchor = settings.stickyCorner;
                         const defaultStickyEnabled = !!(settings && settings.defaultStickyEnabled);
                         if (DEBUG) console.log(`[EYV DBG] Loaded all settings: stickyPlayerEnabled=${stickyPlayerEnabled}, pipEnabled=${pipEnabled}, defaultStickyEnabled=${defaultStickyEnabled}, inactiveWhenPaused=${inactiveWhenPausedEnabled}, inactiveAtEnd=${inactiveAtEndEnabled}`);
 
@@ -1323,6 +1418,13 @@
                 // page (or reload while scrolled down) sticks immediately.
                 cleanupRegistry.addListener(window, 'scroll', onScrollStick, { passive: true });
                 handleScrollStick();
+
+                // Corner mini-player drag (capture phase). Handlers no-op unless stickyMode
+                // is 'corner', so they're harmless for the top-pinned modes.
+                if (playerElementRef) {
+                    cleanupRegistry.addListener(playerElementRef, 'mousedown', onCornerMouseDown, true);
+                    cleanupRegistry.addListener(playerElementRef, 'click', onCornerClickCapture, true);
+                }
         }; // End of initializeControlsContinued
 
         // When a watch page loads in a BACKGROUND/hidden tab (e.g. opened via
@@ -1458,6 +1560,12 @@
     function deactivateStickyModeInternal(preservePauseFlag = false, preserveModeFlags = false) {
         if (!stickyButtonElement || !stickyButtonElement.classList.contains('active')) return;
         if (DEBUG) console.log('[EYV DBG] Deactivating sticky mode.'); else console.log('[EYV] Deactivating sticky mode.');
+
+        // Reset corner floating-mini state (scroll-stick) on any deactivation. Drag handlers
+        // are gated on stickyMode, so resetting to 'top' disarms them automatically.
+        if (playerElementRef) playerElementRef.classList.remove('eyv-player-corner');
+        stickyMode = 'top';
+        cornerDragState = null;
         if (playerElementRef) {
             // Restore player to original DOM position (moved to body during activation)
             if (originalPlayerParent && originalPlayerParent.isConnected) {
@@ -1861,6 +1969,14 @@
                 if (DEBUG) console.log('[EYV DBG] Moved player to document.body for proper z-index stacking');
 
                 playerElement.classList.add('eyv-player-fixed');
+
+                // Apply the requested sticky layout: 'corner' (scroll-stick floating mini)
+                // or 'top' (manual button / Auto-Activate). pendingStickyMode is set by the
+                // scroll-stick path before its programmatic click; it resets to 'top' here so
+                // manual/auto activations always use the top-pinned layout.
+                stickyMode = pendingStickyMode;
+                pendingStickyMode = 'top';
+                playerElement.classList.toggle('eyv-player-corner', stickyMode === 'corner');
 
                 // Always use centerStickyPlayer to calculate dimensions after moving to body
                 // This ensures proper sizing regardless of view mode (default, theater, fullscreen)
@@ -2401,6 +2517,49 @@
     function centerStickyPlayer(fixedPlayer, skipYouTubeSync = false) {
         if (!fixedPlayer?.classList.contains('eyv-player-fixed')) return;
         const mastheadOffset = getMastheadOffset();
+
+        // Aspect ratio (height/width): prefer the video's live intrinsic ratio so the box
+        // always matches the real frame regardless of how it was captured at activation.
+        let validAspectRatio = (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0) ? originalPlayerAspectRatio : 9/16;
+        {
+            const liveVideoForRatio = fixedPlayer.querySelector('video.html5-main-video');
+            if (liveVideoForRatio && liveVideoForRatio.videoWidth > 0 && liveVideoForRatio.videoHeight > 0) {
+                validAspectRatio = liveVideoForRatio.videoHeight / liveVideoForRatio.videoWidth;
+            }
+        }
+
+        let newW, newH, newL, newTop = mastheadOffset;
+
+        // CORNER MODE (scroll-stick floating mini-player): a small box docked to a corner
+        // and draggable. The placeholder keeps the ORIGINAL inline space so scrolling back
+        // up returns the player without a layout jump.
+        if (stickyMode === 'corner') {
+            const margin = CORNER_MARGIN;
+            newW = Math.min(CORNER_WIDTH, Math.max(200, window.innerWidth - margin * 2));
+            newH = newW * validAspectRatio;
+            const maxMiniHeight = window.innerHeight - margin * 2;
+            if (maxMiniHeight > 0 && newH > maxMiniHeight) { newH = maxMiniHeight; newW = newH / validAspectRatio; }
+            const pos = getCornerPosition(cornerAnchor, newW, newH, margin, mastheadOffset);
+            newL = pos.left; newTop = pos.top;
+
+            if (!isFinite(newW) || !isFinite(newH) || newW <= 0 || newH <= 0) {
+                console.warn('[EYV] Invalid corner dimensions in centerStickyPlayer, aborting');
+                return;
+            }
+            Object.assign(fixedPlayer.style, { width: `${newW}px`, height: `${newH}px`, left: `${newL}px`, top: `${newTop}px`, transform: 'translateX(0%)' });
+
+            // Keep the placeholder at the player's ORIGINAL inline size (not the mini size)
+            // so the page layout and scroll position are preserved while the mini floats.
+            const cornerPlaceholder = document.getElementById('eyv-player-placeholder');
+            if (cornerPlaceholder && cornerPlaceholder.isConnected) {
+                const primaryColForPh = document.querySelector('#primary.ytd-watch-flexy');
+                let inlineW = primaryColForPh ? primaryColForPh.getBoundingClientRect().width : newW;
+                if (!isFinite(inlineW) || inlineW <= 0) inlineW = parseFloat(cornerPlaceholder.style.width) || newW;
+                cornerPlaceholder.style.display = 'block';
+                cornerPlaceholder.style.width = `${inlineW}px`;
+                cornerPlaceholder.style.height = `${inlineW * validAspectRatio}px`;
+            }
+        } else {
         const watchFlexy = document.querySelector('ytd-watch-flexy');
         const primaryCol = document.querySelector('#primary.ytd-watch-flexy');
         let refRect;
@@ -2438,7 +2597,7 @@
             const vpH = vpW * (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0 ? originalPlayerAspectRatio : 9/16);
             Object.assign(fixedPlayer.style, { width: `${vpW}px`, height: `${vpH}px`, left: `${vpL}px`, top: `${mastheadOffset}px`, transform: 'translateX(0%)' }); return;
         }
-        let newW = refRect.width, newL = refRect.left;
+        newW = refRect.width; newL = refRect.left;
         if (isNaN(newW) || newW <= 0) newW = parseFloat(fixedPlayer.style.width) || (window.innerWidth > 700 ? 640 : window.innerWidth * 0.9);
 
         // Apply max-width constraint in default view to prevent player from getting too large
@@ -2459,16 +2618,8 @@
             }
         }
 
-        // Calculate height with validation to prevent NaN/Infinity.
-        // Prefer the video's live intrinsic ratio so every resize matches the actual
-        // frame, regardless of when/how originalPlayerAspectRatio was captured (e.g.
-        // auto-sticky on load can capture a height-constrained theater box ratio).
-        let validAspectRatio = (isFinite(originalPlayerAspectRatio) && originalPlayerAspectRatio > 0) ? originalPlayerAspectRatio : 9/16;
-        const liveVideo = fixedPlayer.querySelector('video.html5-main-video');
-        if (liveVideo && liveVideo.videoWidth > 0 && liveVideo.videoHeight > 0) {
-            validAspectRatio = liveVideo.videoHeight / liveVideo.videoWidth;
-        }
-        let newH = newW * validAspectRatio;
+        // Height from the shared validAspectRatio computed at the top of the function.
+        newH = newW * validAspectRatio;
 
         // Constrain height to viewport to prevent OSD controls from being pushed off screen
         // Leave some margin (100px) to ensure controls are fully visible. Clamp to a small
@@ -2514,6 +2665,7 @@
                 if (DEBUG) console.log(`[EYV DBG] Updated placeholder to ${newW}px x ${newH}px`);
             }
         }
+        } // end top-pin (non-corner) geometry branch
 
         if (!skipYouTubeSync) {
             // Force YouTube to acknowledge the new size immediately
@@ -2600,6 +2752,18 @@
                 box-sizing: border-box !important;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.2);
                 pointer-events: none !important; /* Lets clicks pass through the wrapper */
+            }
+
+            /* Corner mini-player (scroll-stick): rounded floating window, draggable. */
+            .eyv-player-corner {
+                border-radius: 12px !important;
+                overflow: hidden !important;
+                box-shadow: 0 8px 28px rgba(0,0,0,0.55) !important;
+            }
+            .eyv-player-corner .html5-video-player,
+            .eyv-player-corner .html5-video-container,
+            .eyv-player-corner video.html5-main-video {
+                cursor: move !important;
             }
 
             /* FIX: Removed '>' to select descendants, not just direct children */

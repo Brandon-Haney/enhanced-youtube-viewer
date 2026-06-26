@@ -1374,7 +1374,7 @@
         };
         const onSnapEnd = (e) => { if (e.target === playerElementRef) done(); };
         playerElementRef.addEventListener('transitionend', onSnapEnd);
-        cornerSnapTimeoutId = setTimeout(done, 320); // safety net
+        cornerSnapTimeoutId = setTimeout(done, 460); // safety net (outlasts the 0.34s bounce)
     }
 
     function endCornerSnapAnim() {
@@ -3217,9 +3217,17 @@
                 cursor: move !important;
             }
             /* Drag-release snap glide: armed only for the one frame the snap is applied,
-               so live dragging/resizing (which set styles every frame) stay instant. */
+               so live dragging/resizing (which set styles every frame) stay instant. The
+               POSITION uses an overshoot ("back-out") curve so it bounces slightly into the
+               edge like an iPad; size changes (on resize-release) stay a clean ease-out. */
             .eyv-player-corner.eyv-corner-snapping {
-                transition: left 0.2s ease-out, top 0.2s ease-out, width 0.2s ease-out, height 0.2s ease-out !important;
+                transition: left 0.34s cubic-bezier(0.34, 1.56, 0.64, 1),
+                            top 0.34s cubic-bezier(0.34, 1.56, 0.64, 1),
+                            width 0.22s ease-out,
+                            height 0.22s ease-out !important;
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .eyv-player-corner.eyv-corner-snapping { transition: none !important; }
             }
 
             /* Drag-to-resize grabber on the corner mini-player's inner corner: a small

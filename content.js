@@ -1353,7 +1353,7 @@
         if (carat) carat.textContent = side === 'left' ? '›' : '‹';
         tab.classList.toggle('eyv-corner-tab-left', side === 'left');
         tab.classList.toggle('eyv-corner-tab-right', side === 'right');
-        const tabH = 72;
+        const tabH = 83;
         const top = clampNum((centerY || window.innerHeight / 2) - tabH / 2, 8, window.innerHeight - tabH - 8);
         tab.style.top = `${top}px`;
         tab.style.left = side === 'left' ? '0px' : 'auto';
@@ -1448,23 +1448,20 @@
     // DEV/EXPERIMENTAL tuning knobs for the ambient features. These are wired to live sliders in
     // the popup ("Ambient Tuning") so good values can be dialed in by eye, then the chosen numbers
     // hardcoded here and the sliders removed. The defaults below are the tamed baseline. The
-    // CSS-driven knobs (blur, opacity, pulse) are mirrored to :root custom properties by
-    // applyAmbientTuning(); the JS-driven knobs are read inline where they're used.
+    // CSS-driven knobs (halo blur/opacity, tab blur/brightness/saturation) are mirrored to :root
+    // custom properties by applyAmbientTuning(); the JS-driven knobs are read inline where used.
     const DEV_AMBIENT = {
         haloGrow: 0.02,      // halo size: fraction of the box the glow extends beyond the video
         haloBlur: 14,        // halo blur radius (px)
         haloOpacity: 0.7,    // halo opacity (0..1)
         tabBlur: 6,          // frosted-video tab: blur radius (px)
         tabBrightness: 0.9,  // frosted-video tab: brightness multiplier
-        tabSaturation: 1.2,  // frosted-video tab: saturation multiplier
-        pulseSpeed: 2.4,     // tab pulse period (s); higher = slower
-        pulseAmp: 16         // tab pulse peak glow radius (px); set low/0 for a subtle breath
+        tabSaturation: 1.2   // frosted-video tab: saturation multiplier
     };
     // Maps a popup storage key -> the DEV_AMBIENT field it controls (used by load + SETTING_CHANGED).
     const AMBIENT_TUNING_KEYS = {
         ambHaloGrow: 'haloGrow', ambHaloBlur: 'haloBlur', ambHaloOpacity: 'haloOpacity',
-        ambTabBlur: 'tabBlur', ambTabBrightness: 'tabBrightness', ambTabSaturation: 'tabSaturation',
-        ambPulseSpeed: 'pulseSpeed', ambPulseAmp: 'pulseAmp'
+        ambTabBlur: 'tabBlur', ambTabBrightness: 'tabBrightness', ambTabSaturation: 'tabSaturation'
     };
 
     let tabVideoCtx = null;       // 2d context of the frosted-video canvas inside the edge tab
@@ -1555,9 +1552,6 @@
         if (root && root.style) {
             root.style.setProperty('--eyv-halo-blur', `${DEV_AMBIENT.haloBlur}px`);
             root.style.setProperty('--eyv-halo-opacity', `${DEV_AMBIENT.haloOpacity}`);
-            root.style.setProperty('--eyv-pulse-speed', `${DEV_AMBIENT.pulseSpeed}s`);
-            root.style.setProperty('--eyv-pulse-max', `${DEV_AMBIENT.pulseAmp}px`);
-            root.style.setProperty('--eyv-pulse-min', `${Math.round(DEV_AMBIENT.pulseAmp * 0.7)}px`);
             // Frosted-video tab filter knobs.
             root.style.setProperty('--eyv-tab-blur', `${DEV_AMBIENT.tabBlur}px`);
             root.style.setProperty('--eyv-tab-brightness', `${DEV_AMBIENT.tabBrightness}`);
@@ -1754,8 +1748,6 @@
         ambTabBlur: null,
         ambTabBrightness: null,
         ambTabSaturation: null,
-        ambPulseSpeed: null,
-        ambPulseAmp: null,
         loaded: false
     };
 
@@ -1860,7 +1852,7 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo', 'ambHaloGrow', 'ambHaloBlur', 'ambHaloOpacity', 'ambTabBlur', 'ambTabBrightness', 'ambTabSaturation', 'ambPulseSpeed', 'ambPulseAmp'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo', 'ambHaloGrow', 'ambHaloBlur', 'ambHaloOpacity', 'ambTabBlur', 'ambTabBrightness', 'ambTabSaturation'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
@@ -3630,8 +3622,8 @@
             }
             #eyv-corner-tab {
                 position: fixed !important;
-                width: 30px !important;
-                height: 72px !important;
+                width: 28px !important;
+                height: 83px !important;
                 display: flex !important;
                 align-items: center !important;
                 justify-content: center !important;
@@ -3640,19 +3632,14 @@
                 font-weight: 800 !important;
                 line-height: 1 !important;
                 color: #fff !important;
-                /* Accent + glow come from CSS vars so the ambient feature can recolor them from the
-                   video frame; the defaults are the vivid YouTube-red used when ambient is off. */
+                /* Fallback fill shown only when the frosted-video layer is off (toggle off); the
+                   video covers it when on. No box-shadow/glow and no pulse (removed per design). */
                 --eyv-tab-accent: #ff0033;
-                --eyv-tab-glow: rgba(255,0,51,0.75);
                 background-color: var(--eyv-tab-accent) !important;
-                box-shadow: 0 0 0 2px rgba(255,255,255,0.35) inset, 0 2px 14px var(--eyv-tab-glow) !important;
                 cursor: pointer !important;
                 z-index: 2147483647 !important;
                 opacity: 1 !important;
-                /* Slow color easing so the ~6fps ambient updates blend instead of stepping. */
-                transition: background-color 0.6s ease, transform 0.15s ease, box-shadow 0.6s ease !important;
-                /* Gentle pulse to draw the eye to where the mini went; period/peak are dev-tunable. */
-                animation: eyv-tab-pulse var(--eyv-pulse-speed, 2.4s) ease-in-out infinite !important;
+                transition: transform 0.15s ease !important;
             }
             /* Frosted live-video layer: a low-res canvas scaled to the tab HEIGHT at 16:9 (so it's
                wider than the 30px tab and clipped to a sliver), anchored to the docked side and
@@ -3677,7 +3664,6 @@
             #eyv-corner-tab:hover {
                 filter: brightness(1.12) !important;
                 transform: scale(1.08) !important;
-                animation: none !important;
             }
             #eyv-corner-tab.eyv-corner-tab-left {
                 border-radius: 0 12px 12px 0 !important;
@@ -3689,14 +3675,6 @@
                 padding-left: 3px !important;
                 transform-origin: right center !important;
             }
-            @keyframes eyv-tab-pulse {
-                0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.30) inset, 0 2px var(--eyv-pulse-min, 11px) var(--eyv-tab-glow); }
-                50%      { box-shadow: 0 0 0 2px rgba(255,255,255,0.42) inset, 0 2px var(--eyv-pulse-max, 16px) var(--eyv-tab-glow); }
-            }
-            @media (prefers-reduced-motion: reduce) {
-                #eyv-corner-tab { animation: none !important; }
-            }
-
             /* Ambilight halo (dev): a low-res frame copy behind the corner mini, blurred so the
                video's colors spill out around it. Sits one layer below the player (z 9998). */
             #eyv-ambilight {

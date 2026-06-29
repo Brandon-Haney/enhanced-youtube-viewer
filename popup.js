@@ -174,9 +174,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 ambHaloOpacity: 0.7,
                 ambTabBlur: 6,
                 ambTabBrightness: 0.9,
-                ambTabSaturation: 1.2,
-                ambPulseSpeed: 2.4,
-                ambPulseAmp: 16
+                ambTabSaturation: 1.2
             }, function(result) {
                 if (chrome.runtime.lastError) {
                     reject(chrome.runtime.lastError);
@@ -539,9 +537,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { id: 'ambHaloOpacitySlider',  key: 'ambHaloOpacity',  field: 'haloOpacity',  def: 0.7,  dec: 2 },
         { id: 'ambTabBlurSlider',       key: 'ambTabBlur',       field: 'tabBlur',       def: 6,    dec: 0 },
         { id: 'ambTabBrightnessSlider', key: 'ambTabBrightness', field: 'tabBrightness', def: 0.9,  dec: 2 },
-        { id: 'ambTabSaturationSlider', key: 'ambTabSaturation', field: 'tabSaturation', def: 1.2,  dec: 2 },
-        { id: 'ambPulseSpeedSlider',   key: 'ambPulseSpeed',   field: 'pulseSpeed',   def: 2.4,  dec: 1 },
-        { id: 'ambPulseAmpSlider',     key: 'ambPulseAmp',     field: 'pulseAmp',     def: 16,   dec: 0 }
+        { id: 'ambTabSaturationSlider', key: 'ambTabSaturation', field: 'tabSaturation', def: 1.2,  dec: 2 }
     ];
 
     function setupAmbientSliders(saved) {

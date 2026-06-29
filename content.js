@@ -3632,10 +3632,11 @@
                 font-weight: 800 !important;
                 line-height: 1 !important;
                 color: #fff !important;
-                /* Fallback fill shown only when the frosted-video layer is off (toggle off); the
-                   video covers it when on. No box-shadow/glow and no pulse (removed per design). */
-                --eyv-tab-accent: #ff0033;
-                background-color: var(--eyv-tab-accent) !important;
+                /* Dark fill behind the frosted video. CSS blur() fades the video to transparent at
+                   its edges, so this shows through at the rim — keep it neutral (a red fill bled
+                   through as a red edge). Also the tab's look when the frosted-video layer is off.
+                   No box-shadow/glow and no pulse (removed per design). */
+                background-color: #0f0f0f !important;
                 cursor: pointer !important;
                 z-index: 2147483647 !important;
                 opacity: 1 !important;

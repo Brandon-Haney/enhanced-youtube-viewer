@@ -16,6 +16,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const stickyOnScrollToggle = document.getElementById('stickyOnScrollToggle');
     const inactiveWhenPausedToggle = document.getElementById('inactiveWhenPausedToggle');
     const inactiveAtEndToggle = document.getElementById('inactiveAtEndToggle');
+    const ambientTabGlowToggle = document.getElementById('ambientTabGlowToggle');
+    const ambilightHaloToggle = document.getElementById('ambilightHaloToggle');
     const versionText = document.getElementById('versionText');
     const saveIndicator = document.getElementById('saveIndicator');
 
@@ -88,6 +90,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let stickyOnScrollTimer = null;
     let inactiveWhenPausedTimer = null;
     let inactiveAtEndTimer = null;
+    let ambientTabGlowTimer = null;
+    let ambilightHaloTimer = null;
 
     // Set version dynamically with error handling
     if (versionText) {
@@ -161,7 +165,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 defaultStickyEnabled: false,
                 stickyOnScroll: false,
                 inactiveWhenPaused: false,
-                inactiveAtEnd: false
+                inactiveAtEnd: false,
+                ambientTabGlow: false,
+                ambilightHalo: false
             }, function(result) {
                 if (chrome.runtime.lastError) {
                     reject(chrome.runtime.lastError);
@@ -184,6 +190,8 @@ document.addEventListener('DOMContentLoaded', function() {
         stickyOnScrollToggle.checked = result.stickyOnScroll;
         inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
         inactiveAtEndToggle.checked = result.inactiveAtEnd;
+        if (ambientTabGlowToggle) ambientTabGlowToggle.checked = result.ambientTabGlow;
+        if (ambilightHaloToggle) ambilightHaloToggle.checked = result.ambilightHalo;
 
         // Update action cards with null checks
         const stickyStatus = stickyPlayerCard.querySelector('.action-status');
@@ -421,6 +429,82 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (!isChromeContextValid()) return;
                     showSaveConfirmation();
                     sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'inactiveAtEnd', value: newValue });
+                })
+                .catch(error => {
+                    console.error('[EYV Popup] Storage error or timeout:', error);
+                    toggle.checked = !newValue; // Revert UI - the write failed
+                    if (error.message && error.message.includes('QUOTA')) {
+                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
+                    } else if (error.message && error.message.includes('timeout')) {
+                        showStatus('Storage operation timed out. Please try again.', true);
+                    }
+                });
+            }, DEBOUNCE_MS);
+        });
+    }
+
+    // Save preference when 'ambientTabGlowToggle' changes (dev/experimental)
+    if (ambientTabGlowToggle) {
+        ambientTabGlowToggle.addEventListener('change', function() {
+            const newValue = this.checked;
+            const toggle = this;
+
+            // Debounce to prevent rapid concurrent writes
+            if (ambientTabGlowTimer) clearTimeout(ambientTabGlowTimer);
+            ambientTabGlowTimer = setTimeout(() => {
+                storageWithTimeout(() => {
+                    return new Promise((resolve, reject) => {
+                        chrome.storage.local.set({ambientTabGlow: newValue}, () => {
+                            if (chrome.runtime.lastError) {
+                                reject(chrome.runtime.lastError);
+                            } else {
+                                resolve();
+                            }
+                        });
+                    });
+                })
+                .then(() => {
+                    if (!isChromeContextValid()) return;
+                    showSaveConfirmation();
+                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'ambientTabGlow', value: newValue });
+                })
+                .catch(error => {
+                    console.error('[EYV Popup] Storage error or timeout:', error);
+                    toggle.checked = !newValue; // Revert UI - the write failed
+                    if (error.message && error.message.includes('QUOTA')) {
+                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
+                    } else if (error.message && error.message.includes('timeout')) {
+                        showStatus('Storage operation timed out. Please try again.', true);
+                    }
+                });
+            }, DEBOUNCE_MS);
+        });
+    }
+
+    // Save preference when 'ambilightHaloToggle' changes (dev/experimental)
+    if (ambilightHaloToggle) {
+        ambilightHaloToggle.addEventListener('change', function() {
+            const newValue = this.checked;
+            const toggle = this;
+
+            // Debounce to prevent rapid concurrent writes
+            if (ambilightHaloTimer) clearTimeout(ambilightHaloTimer);
+            ambilightHaloTimer = setTimeout(() => {
+                storageWithTimeout(() => {
+                    return new Promise((resolve, reject) => {
+                        chrome.storage.local.set({ambilightHalo: newValue}, () => {
+                            if (chrome.runtime.lastError) {
+                                reject(chrome.runtime.lastError);
+                            } else {
+                                resolve();
+                            }
+                        });
+                    });
+                })
+                .then(() => {
+                    if (!isChromeContextValid()) return;
+                    showSaveConfirmation();
+                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'ambilightHalo', value: newValue });
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);

@@ -65,6 +65,7 @@ Once installed and active:
     *   **Auto-Activate** sticky mode on page load.
     *   Enable **Stick on Scroll** — the player shrinks into a floating mini-player as you scroll. Drag it anywhere to reposition (it docks to the nearest edge and remembers the spot), fling it off the side to tuck it into a tab, and drag its inner-corner grabber to resize.
     *   Turn on **Pause Deactivation** / **End Deactivation** to drop the top sticky player when the video pauses or ends.
+    *   **(Experimental)** Try **Ambient Tab Glow** (the edge-tuck tab takes its color from the playing video, iOS-style) and **Ambilight Halo** (a blurred glow of the video spills out behind the floating mini-player).
 4.  The sticky player will automatically disable if you activate YouTube's native Miniplayer or Fullscreen modes to prevent conflicts.
 
 ---

@@ -564,9 +564,15 @@
 
             if (message.type === "SETTING_CHANGED") {
                 if (DEBUG) console.log(`[EYV DBG] Received setting change: ${message.key} = ${message.value}`);
-                // Validate message.value is a boolean
-                if (typeof message.value !== 'boolean') {
-                    console.warn('[EYV] Invalid message value type:', typeof message.value);
+                // Validate value type: ambient-tuning keys carry a finite number (slider value);
+                // every other setting is a boolean toggle. (Numeric sliders were being rejected by
+                // a blanket boolean-only check, so live tuning had no effect.)
+                const isTuningKey = !!AMBIENT_TUNING_KEYS[message.key];
+                const validValueType = isTuningKey
+                    ? (typeof message.value === 'number' && Number.isFinite(message.value))
+                    : (typeof message.value === 'boolean');
+                if (!validValueType) {
+                    console.warn('[EYV] Invalid message value type for', message.key, ':', typeof message.value);
                     sendResponse({ status: "error", message: "Invalid value type" });
                     return true;
                 }

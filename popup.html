@@ -99,6 +99,51 @@
                 </label>
             </div>
 
+            <!-- DEV: live ambient-tuning sliders. Dial values in by eye on an open YouTube tab,
+                 then "Copy values" and hardcode them into DEV_AMBIENT in content.js. -->
+            <div class="setting-card dev-tuning-card">
+                <div class="setting-name">Ambient Tuning <span class="dev-badge">live</span></div>
+                <div class="setting-hint">Drag to preview live on an open YouTube tab. Tune the halo and the edge-tuck tab glow, then hit “Copy values”.</div>
+
+                <div class="dev-group-label">Ambilight halo</div>
+                <div class="dev-slider">
+                    <label for="ambHaloGrowSlider">Halo size <span id="ambHaloGrowSliderVal">0.020</span></label>
+                    <input type="range" id="ambHaloGrowSlider" min="0" max="0.15" step="0.005">
+                </div>
+                <div class="dev-slider">
+                    <label for="ambHaloBlurSlider">Halo blur (px) <span id="ambHaloBlurSliderVal">14</span></label>
+                    <input type="range" id="ambHaloBlurSlider" min="0" max="40" step="1">
+                </div>
+                <div class="dev-slider">
+                    <label for="ambHaloOpacitySlider">Halo opacity <span id="ambHaloOpacitySliderVal">0.70</span></label>
+                    <input type="range" id="ambHaloOpacitySlider" min="0" max="1" step="0.05">
+                </div>
+
+                <div class="dev-group-label">Edge-tuck tab glow</div>
+                <div class="dev-slider">
+                    <label for="ambTabSmoothingSlider">Color smoothing <span id="ambTabSmoothingSliderVal">0.16</span></label>
+                    <input type="range" id="ambTabSmoothingSlider" min="0.02" max="0.6" step="0.01">
+                </div>
+                <div class="dev-slider">
+                    <label for="ambTabVibrancySlider">Vibrancy <span id="ambTabVibrancySliderVal">0.60</span></label>
+                    <input type="range" id="ambTabVibrancySlider" min="0" max="1" step="0.05">
+                </div>
+                <div class="dev-slider">
+                    <label for="ambTabGlowAlphaSlider">Glow strength <span id="ambTabGlowAlphaSliderVal">0.60</span></label>
+                    <input type="range" id="ambTabGlowAlphaSlider" min="0" max="1" step="0.05">
+                </div>
+                <div class="dev-slider">
+                    <label for="ambPulseSpeedSlider">Pulse speed (s) <span id="ambPulseSpeedSliderVal">2.4</span></label>
+                    <input type="range" id="ambPulseSpeedSlider" min="0.8" max="5" step="0.1">
+                </div>
+                <div class="dev-slider">
+                    <label for="ambPulseAmpSlider">Pulse strength <span id="ambPulseAmpSliderVal">16</span></label>
+                    <input type="range" id="ambPulseAmpSlider" min="0" max="30" step="1">
+                </div>
+
+                <button type="button" id="ambCopyValuesBtn" class="dev-copy-btn">Copy values</button>
+            </div>
+
             <p id="saveIndicator" class="save-indicator" style="display: none;">✓ Settings saved</p>
         </div>
         <div class="footer">

@@ -593,6 +593,14 @@
                     settingsCache.ambilightHalo = message.value;
                     if (!message.value) removeAmbilightHalo();
                     startAmbientSampler();
+                } else if (AMBIENT_TUNING_KEYS[message.key]) {
+                    // DEV: live ambient-tuning slider changed — update the knob and re-apply.
+                    const num = Number(message.value);
+                    if (!Number.isNaN(num)) {
+                        DEV_AMBIENT[AMBIENT_TUNING_KEYS[message.key]] = num;
+                        settingsCache[message.key] = num;
+                        applyAmbientTuning();
+                    }
                 } else if (message.key === 'defaultStickyEnabled') {
                     settingsCache.defaultStickyEnabled = message.value;
 
@@ -1000,22 +1008,15 @@
         return { left, top };
     }
 
-    // Pick the nearest screen edge for a box and capture its position ALONG that edge so the
-    // mini settles against the closest edge wherever it was dropped — not just to a corner.
+    // Pick the nearest SIDE edge (left/right) for a box and capture its vertical position along
+    // that edge, so the mini settles against the closer side at whatever height it was dropped —
+    // free vertical placement, but always hugging a side (top/bottom docking is intentionally
+    // not offered: a top/bottom-center mini covers the masthead or the content being read).
     function nearestDockForRect(rect) {
-        const margin = CORNER_MARGIN;
-        const topEdge = Math.max(margin, getMastheadOffset() + margin);
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
-        const distLeft = rect.left - margin;
-        const distRight = (window.innerWidth - margin) - rect.right;
-        const distTop = rect.top - topEdge;
-        const distBottom = (window.innerHeight - margin) - rect.bottom;
-        const min = Math.min(distLeft, distRight, distTop, distBottom);
-        if (min === distLeft) return { edge: 'left', pos: clampNum(cy / window.innerHeight, 0, 1) };
-        if (min === distRight) return { edge: 'right', pos: clampNum(cy / window.innerHeight, 0, 1) };
-        if (min === distTop) return { edge: 'top', pos: clampNum(cx / window.innerWidth, 0, 1) };
-        return { edge: 'bottom', pos: clampNum(cx / window.innerWidth, 0, 1) };
+        const edge = cx < window.innerWidth / 2 ? 'left' : 'right';
+        return { edge, pos: clampNum(cy / window.innerHeight, 0, 1) };
     }
 
     // For resize/handle placement we still need a concrete corner: the one ON the docked edge,
@@ -1338,10 +1339,33 @@
     const AMBIENT_W = 32;         // tiny sample buffer - we only want dominant color, not detail
     const AMBIENT_H = 18;         // ~16:9
 
+    // DEV/EXPERIMENTAL tuning knobs for the ambient features. These are wired to live sliders in
+    // the popup ("Ambient Tuning") so good values can be dialed in by eye, then the chosen numbers
+    // hardcoded here and the sliders removed. The defaults below are the tamed baseline. The
+    // CSS-driven knobs (blur, opacity, pulse) are mirrored to :root custom properties by
+    // applyAmbientTuning(); the JS-driven knobs are read inline where they're used.
+    const DEV_AMBIENT = {
+        haloGrow: 0.02,      // halo size: fraction of the box the glow extends beyond the video
+        haloBlur: 14,        // halo blur radius (px)
+        haloOpacity: 0.7,    // halo opacity (0..1)
+        tabSmoothing: 0.16,  // tab color easing per sample (lower = calmer/slower drift)
+        tabVibrancy: 0.6,    // tab accent mix: 0 = muted (frame average), 1 = full vivid accent
+        tabGlowAlpha: 0.6,   // tab glow strength (0..1)
+        pulseSpeed: 2.4,     // tab pulse period (s); higher = slower
+        pulseAmp: 16         // tab pulse peak glow radius (px); set low/0 for a subtle breath
+    };
+    // Maps a popup storage key -> the DEV_AMBIENT field it controls (used by load + SETTING_CHANGED).
+    const AMBIENT_TUNING_KEYS = {
+        ambHaloGrow: 'haloGrow', ambHaloBlur: 'haloBlur', ambHaloOpacity: 'haloOpacity',
+        ambTabSmoothing: 'tabSmoothing', ambTabVibrancy: 'tabVibrancy', ambTabGlowAlpha: 'tabGlowAlpha',
+        ambPulseSpeed: 'pulseSpeed', ambPulseAmp: 'pulseAmp'
+    };
+
     let ambientSampleCanvas = null, ambientSampleCtx = null; // for color analysis (tab glow)
     let ambientHaloCanvas = null, ambientHaloCtx = null;     // the blurred frame drawn behind the mini
     let ambientRafId = null;      // rAF handle for the sampler loop (null when idle)
     let ambientLastSampleTs = 0;  // timestamp of the last frame we actually sampled
+    let tabAmbientCurrent = null; // smoothed tab accent {r,g,b}; eases toward each new sample
 
     function getAmbientSampleCtx() {
         if (!ambientSampleCanvas) {
@@ -1379,7 +1403,16 @@
         }
         if (!n) return null;
         const avg = { r: Math.round(rSum / n), g: Math.round(gSum / n), b: Math.round(bSum / n) };
-        return { avg, accent: (bestScore > 0.12 && best) ? best : avg };
+        const rawAccent = (bestScore > 0.12 && best) ? best : avg;
+        // Tame vibrancy: blend the accent toward the frame average so it reads as a soft tint
+        // rather than a neon. tabVibrancy 1 = full vivid accent, 0 = muted (the average).
+        const v = clampNum(DEV_AMBIENT.tabVibrancy, 0, 1);
+        const accent = {
+            r: Math.round(rawAccent.r * v + avg.r * (1 - v)),
+            g: Math.round(rawAccent.g * v + avg.g * (1 - v)),
+            b: Math.round(rawAccent.b * v + avg.b * (1 - v))
+        };
+        return { avg, accent };
     }
 
     // Draw the current frame small and analyze it. Returns {avg, accent} or null (no frame / blocked).
@@ -1404,9 +1437,10 @@
         if (!tab) return;
         const rgb = `${c.r}, ${c.g}, ${c.b}`;
         tab.style.setProperty('--eyv-tab-accent', `rgb(${rgb})`);
-        tab.style.setProperty('--eyv-tab-glow', `rgba(${rgb}, 0.85)`);
+        tab.style.setProperty('--eyv-tab-glow', `rgba(${rgb}, ${clampNum(DEV_AMBIENT.tabGlowAlpha, 0, 1)})`);
     }
     function clearTabAmbient() {
+        tabAmbientCurrent = null; // restart the color smoothing fresh on the next tuck
         const tab = document.getElementById('eyv-corner-tab');
         if (!tab) return;
         tab.style.removeProperty('--eyv-tab-accent');
@@ -1434,13 +1468,33 @@
         if (video && ambientHaloCtx) {
             try { ambientHaloCtx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H); } catch (e) { /* keep last frame */ }
         }
-        // Grow the halo a bit beyond the player so the blur reads as light around it.
-        const grow = Math.round(Math.min(rect.width, rect.height) * 0.2);
+        // Grow the halo a touch beyond the player so the blur reads as a rim of light around it.
+        // Kept small by default (~2% of the box) so it's a subtle edge glow, not a large cloud
+        // spilling well past the video; tunable via DEV_AMBIENT.haloGrow.
+        const grow = Math.round(Math.min(rect.width, rect.height) * DEV_AMBIENT.haloGrow);
         ambientHaloCanvas.style.left = `${Math.round(rect.left - grow)}px`;
         ambientHaloCanvas.style.top = `${Math.round(rect.top - grow)}px`;
         ambientHaloCanvas.style.width = `${Math.round(rect.width + grow * 2)}px`;
         ambientHaloCanvas.style.height = `${Math.round(rect.height + grow * 2)}px`;
     }
+    // Push the CSS-driven tuning knobs onto :root custom properties (they inherit to the tab and
+    // halo, so changes apply instantly) and refresh the halo so size/blur/opacity update live.
+    // JS-driven knobs (smoothing, vibrancy, grow, glow alpha) are read where they're used, so
+    // they take effect on the next sample/tick automatically.
+    function applyAmbientTuning() {
+        const root = document.documentElement;
+        if (root && root.style) {
+            root.style.setProperty('--eyv-halo-blur', `${DEV_AMBIENT.haloBlur}px`);
+            root.style.setProperty('--eyv-halo-opacity', `${DEV_AMBIENT.haloOpacity}`);
+            root.style.setProperty('--eyv-pulse-speed', `${DEV_AMBIENT.pulseSpeed}s`);
+            root.style.setProperty('--eyv-pulse-max', `${DEV_AMBIENT.pulseAmp}px`);
+            root.style.setProperty('--eyv-pulse-min', `${Math.round(DEV_AMBIENT.pulseAmp * 0.7)}px`);
+        }
+        if (ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner')) {
+            applyAmbilightHalo();
+        }
+    }
+
     function removeAmbilightHalo() {
         ambientHaloCanvas?.remove();
     }
@@ -1459,7 +1513,18 @@
             // Tab glow: only recolor on a fresh frame; keep the last color while paused.
             if (ambientTabGlowEnabled && cornerTuck) {
                 const sample = sampleAmbientFrame();
-                if (sample) applyTabAmbient(sample.accent);
+                if (sample) {
+                    // Ease toward the new accent (exponential moving average) so the tab color
+                    // drifts calmly instead of snapping every sample. Lower tabSmoothing = calmer.
+                    const t = tabAmbientCurrent || sample.accent;
+                    const k = clampNum(DEV_AMBIENT.tabSmoothing, 0.01, 1);
+                    tabAmbientCurrent = {
+                        r: Math.round(t.r + (sample.accent.r - t.r) * k),
+                        g: Math.round(t.g + (sample.accent.g - t.g) * k),
+                        b: Math.round(t.b + (sample.accent.b - t.b) * k)
+                    };
+                    applyTabAmbient(tabAmbientCurrent);
+                }
             }
             // Halo: always reposition to track the mini (it keeps its last frame when paused).
             if (ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner')) {
@@ -1613,6 +1678,15 @@
         stickyCornerWidth: null,
         ambientTabGlow: null,
         ambilightHalo: null,
+        // DEV: ambient-tuning slider values (null until the user moves a slider).
+        ambHaloGrow: null,
+        ambHaloBlur: null,
+        ambHaloOpacity: null,
+        ambTabSmoothing: null,
+        ambTabVibrancy: null,
+        ambTabGlowAlpha: null,
+        ambPulseSpeed: null,
+        ambPulseAmp: null,
         loaded: false
     };
 
@@ -1717,7 +1791,7 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo', 'ambHaloGrow', 'ambHaloBlur', 'ambHaloOpacity', 'ambTabSmoothing', 'ambTabVibrancy', 'ambTabGlowAlpha', 'ambPulseSpeed', 'ambPulseAmp'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
@@ -1726,9 +1800,22 @@
                         stickyOnScrollEnabled = !!(settings && settings.stickyOnScroll);
                         ambientTabGlowEnabled = !!(settings && settings.ambientTabGlow);
                         ambilightHaloEnabled = !!(settings && settings.ambilightHalo);
+                        // DEV: override the ambient-tuning defaults with any saved slider values.
+                        for (const sk in AMBIENT_TUNING_KEYS) {
+                            const saved = settings && settings[sk];
+                            if (saved != null && !Number.isNaN(Number(saved))) {
+                                DEV_AMBIENT[AMBIENT_TUNING_KEYS[sk]] = Number(saved);
+                            }
+                        }
+                        applyAmbientTuning();
                         // Prefer the new edge-dock; fall back to migrating the legacy corner string.
+                        // Only side edges are supported, so coerce any stored top/bottom to a side.
                         if (settings && settings.stickyCornerDock && typeof settings.stickyCornerDock.edge === 'string') {
-                            cornerDock = { edge: settings.stickyCornerDock.edge, pos: clampNum(Number(settings.stickyCornerDock.pos) || 0.5, 0, 1) };
+                            const savedEdge = settings.stickyCornerDock.edge;
+                            cornerDock = {
+                                edge: (savedEdge === 'left' || savedEdge === 'right') ? savedEdge : 'right',
+                                pos: clampNum(Number(settings.stickyCornerDock.pos) || 0.5, 0, 1)
+                            };
                         } else if (settings && typeof settings.stickyCorner === 'string') {
                             cornerDock = legacyCornerToDock(settings.stickyCorner);
                         }
@@ -3491,10 +3578,10 @@
                 cursor: pointer !important;
                 z-index: 2147483647 !important;
                 opacity: 1 !important;
-                /* Slower color easing so the ~6fps ambient updates blend instead of stepping. */
-                transition: background-color 0.4s ease, transform 0.15s ease, box-shadow 0.4s ease !important;
-                /* Gentle pulse to draw the eye to where the mini went. */
-                animation: eyv-tab-pulse 1.5s ease-in-out infinite !important;
+                /* Slow color easing so the ~6fps ambient updates blend instead of stepping. */
+                transition: background-color 0.6s ease, transform 0.15s ease, box-shadow 0.6s ease !important;
+                /* Gentle pulse to draw the eye to where the mini went; period/peak are dev-tunable. */
+                animation: eyv-tab-pulse var(--eyv-pulse-speed, 2.4s) ease-in-out infinite !important;
             }
             #eyv-corner-tab:hover {
                 filter: brightness(1.12) !important;
@@ -3512,8 +3599,8 @@
                 transform-origin: right center !important;
             }
             @keyframes eyv-tab-pulse {
-                0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.35) inset, 0 2px 12px var(--eyv-tab-glow); }
-                50%      { box-shadow: 0 0 0 2px rgba(255,255,255,0.55) inset, 0 2px 24px var(--eyv-tab-glow); }
+                0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.30) inset, 0 2px var(--eyv-pulse-min, 11px) var(--eyv-tab-glow); }
+                50%      { box-shadow: 0 0 0 2px rgba(255,255,255,0.42) inset, 0 2px var(--eyv-pulse-max, 16px) var(--eyv-tab-glow); }
             }
             @media (prefers-reduced-motion: reduce) {
                 #eyv-corner-tab { animation: none !important; }
@@ -3525,8 +3612,8 @@
                 position: fixed !important;
                 z-index: ${zIndex - 1} !important;
                 border-radius: 18px !important;
-                filter: blur(34px) saturate(1.5) !important;
-                opacity: 0.8 !important;
+                filter: blur(var(--eyv-halo-blur, 14px)) saturate(1.4) !important;
+                opacity: var(--eyv-halo-opacity, 0.7) !important;
                 pointer-events: none !important;
                 will-change: left, top, width, height !important;
                 transition: opacity 0.3s ease !important;

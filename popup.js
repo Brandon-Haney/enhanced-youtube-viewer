@@ -167,7 +167,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 inactiveWhenPaused: false,
                 inactiveAtEnd: false,
                 ambientTabGlow: false,
-                ambilightHalo: false
+                ambilightHalo: false,
+                // DEV ambient-tuning slider values (defaults mirror DEV_AMBIENT in content.js).
+                ambHaloGrow: 0.02,
+                ambHaloBlur: 14,
+                ambHaloOpacity: 0.7,
+                ambTabSmoothing: 0.16,
+                ambTabVibrancy: 0.6,
+                ambTabGlowAlpha: 0.6,
+                ambPulseSpeed: 2.4,
+                ambPulseAmp: 16
             }, function(result) {
                 if (chrome.runtime.lastError) {
                     reject(chrome.runtime.lastError);
@@ -192,6 +201,7 @@ document.addEventListener('DOMContentLoaded', function() {
         inactiveAtEndToggle.checked = result.inactiveAtEnd;
         if (ambientTabGlowToggle) ambientTabGlowToggle.checked = result.ambientTabGlow;
         if (ambilightHaloToggle) ambilightHaloToggle.checked = result.ambilightHalo;
+        setupAmbientSliders(result); // DEV: initialize ambient-tuning sliders from saved values
 
         // Update action cards with null checks
         const stickyStatus = stickyPlayerCard.querySelector('.action-status');
@@ -517,5 +527,78 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             }, DEBOUNCE_MS);
         });
+    }
+
+    // --- DEV / Experimental: ambient-tuning sliders ----------------------------------------------
+    // Live-preview while dragging (throttled SETTING_CHANGED messages), persist on a short debounce.
+    // "Copy values" puts a ready-to-hardcode DEV_AMBIENT snippet on the clipboard. Remove this whole
+    // block (and the markup/styles) once the chosen values are baked into content.js.
+    const AMBIENT_SLIDERS = [
+        { id: 'ambHaloGrowSlider',     key: 'ambHaloGrow',     field: 'haloGrow',     def: 0.02, dec: 3 },
+        { id: 'ambHaloBlurSlider',     key: 'ambHaloBlur',     field: 'haloBlur',     def: 14,   dec: 0 },
+        { id: 'ambHaloOpacitySlider',  key: 'ambHaloOpacity',  field: 'haloOpacity',  def: 0.7,  dec: 2 },
+        { id: 'ambTabSmoothingSlider', key: 'ambTabSmoothing', field: 'tabSmoothing', def: 0.16, dec: 2 },
+        { id: 'ambTabVibrancySlider',  key: 'ambTabVibrancy',  field: 'tabVibrancy',  def: 0.6,  dec: 2 },
+        { id: 'ambTabGlowAlphaSlider', key: 'ambTabGlowAlpha', field: 'tabGlowAlpha', def: 0.6,  dec: 2 },
+        { id: 'ambPulseSpeedSlider',   key: 'ambPulseSpeed',   field: 'pulseSpeed',   def: 2.4,  dec: 1 },
+        { id: 'ambPulseAmpSlider',     key: 'ambPulseAmp',     field: 'pulseAmp',     def: 16,   dec: 0 }
+    ];
+
+    function setupAmbientSliders(saved) {
+        AMBIENT_SLIDERS.forEach(cfg => {
+            const slider = document.getElementById(cfg.id);
+            if (!slider) return;
+            const out = document.getElementById(cfg.id + 'Val');
+            const savedVal = saved && saved[cfg.key];
+            const initial = (savedVal != null && !Number.isNaN(Number(savedVal))) ? Number(savedVal) : cfg.def;
+            slider.value = initial;
+            if (out) out.textContent = Number(initial).toFixed(cfg.dec);
+
+            let sendThrottle = null;
+            let saveTimer = null;
+            slider.addEventListener('input', function() {
+                const value = Number(slider.value);
+                if (out) out.textContent = value.toFixed(cfg.dec);
+
+                // Live preview: throttle to ~25fps so a fast drag doesn't flood the content script.
+                // Trailing edge reads slider.value at fire time, so the final value is always sent.
+                if (sendThrottle == null) {
+                    sendThrottle = setTimeout(() => {
+                        sendThrottle = null;
+                        sendMessageToContentScript({ type: 'SETTING_CHANGED', key: cfg.key, value: Number(slider.value) });
+                    }, 40);
+                }
+
+                // Persist on a longer debounce (separate from the live preview).
+                if (saveTimer) clearTimeout(saveTimer);
+                saveTimer = setTimeout(() => {
+                    if (!isChromeContextValid()) return;
+                    chrome.storage.local.set({ [cfg.key]: Number(slider.value) }, () => {
+                        if (chrome.runtime.lastError) console.error('[EYV Popup] Slider save failed:', chrome.runtime.lastError);
+                    });
+                }, 350);
+            });
+        });
+
+        const copyBtn = document.getElementById('ambCopyValuesBtn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function() {
+                // Emit in the DEV_AMBIENT shape (content.js field names) for a direct paste.
+                const dev = {};
+                AMBIENT_SLIDERS.forEach(cfg => {
+                    const slider = document.getElementById(cfg.id);
+                    if (slider) dev[cfg.field] = Number(Number(slider.value).toFixed(cfg.dec));
+                });
+                const snippet = JSON.stringify(dev, null, 4);
+                console.log('[EYV Popup] DEV_AMBIENT values:\n' + snippet);
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(snippet)
+                        .then(() => showStatus('✓ Copied tuning values to clipboard'))
+                        .catch(() => showStatus('Copy failed — values logged to console', true));
+                } else {
+                    showStatus('Values logged to console (clipboard unavailable)', true);
+                }
+            });
+        }
     }
 });

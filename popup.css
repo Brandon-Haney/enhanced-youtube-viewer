@@ -227,3 +227,74 @@ body {
 .footer p {
     margin: 0;
 }
+
+/* DEV / Experimental: ambient-tuning sliders (temporary; removed once values are locked in) */
+.dev-tuning-card {
+    display: block;
+}
+
+.dev-badge {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #fff;
+    background: #ff0033;
+    border-radius: 6px;
+    padding: 1px 5px;
+    vertical-align: 1px;
+}
+
+.dev-group-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #aaa;
+    margin: 14px 0 6px;
+}
+
+.dev-slider {
+    margin-top: 10px;
+}
+
+.dev-slider label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    font-weight: 600;
+    color: #555;
+    margin-bottom: 4px;
+}
+
+.dev-slider label span {
+    font-variant-numeric: tabular-nums;
+    color: #ff0033;
+    font-weight: 700;
+}
+
+.dev-slider input[type="range"] {
+    width: 100%;
+    margin: 0;
+    accent-color: #ff0033;
+    cursor: pointer;
+}
+
+.dev-copy-btn {
+    margin-top: 16px;
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    background: #1a1a1a;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.dev-copy-btn:hover {
+    background: #333;
+}

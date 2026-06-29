@@ -172,9 +172,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 ambHaloGrow: 0.02,
                 ambHaloBlur: 14,
                 ambHaloOpacity: 0.7,
-                ambTabSmoothing: 0.16,
-                ambTabVibrancy: 0.6,
-                ambTabGlowAlpha: 0.6,
+                ambTabBlur: 6,
+                ambTabBrightness: 0.9,
+                ambTabSaturation: 1.2,
                 ambPulseSpeed: 2.4,
                 ambPulseAmp: 16
             }, function(result) {
@@ -537,9 +537,9 @@ document.addEventListener('DOMContentLoaded', function() {
         { id: 'ambHaloGrowSlider',     key: 'ambHaloGrow',     field: 'haloGrow',     def: 0.02, dec: 3 },
         { id: 'ambHaloBlurSlider',     key: 'ambHaloBlur',     field: 'haloBlur',     def: 14,   dec: 0 },
         { id: 'ambHaloOpacitySlider',  key: 'ambHaloOpacity',  field: 'haloOpacity',  def: 0.7,  dec: 2 },
-        { id: 'ambTabSmoothingSlider', key: 'ambTabSmoothing', field: 'tabSmoothing', def: 0.16, dec: 2 },
-        { id: 'ambTabVibrancySlider',  key: 'ambTabVibrancy',  field: 'tabVibrancy',  def: 0.6,  dec: 2 },
-        { id: 'ambTabGlowAlphaSlider', key: 'ambTabGlowAlpha', field: 'tabGlowAlpha', def: 0.6,  dec: 2 },
+        { id: 'ambTabBlurSlider',       key: 'ambTabBlur',       field: 'tabBlur',       def: 6,    dec: 0 },
+        { id: 'ambTabBrightnessSlider', key: 'ambTabBrightness', field: 'tabBrightness', def: 0.9,  dec: 2 },
+        { id: 'ambTabSaturationSlider', key: 'ambTabSaturation', field: 'tabSaturation', def: 1.2,  dec: 2 },
         { id: 'ambPulseSpeedSlider',   key: 'ambPulseSpeed',   field: 'pulseSpeed',   def: 2.4,  dec: 1 },
         { id: 'ambPulseAmpSlider',     key: 'ambPulseAmp',     field: 'pulseAmp',     def: 16,   dec: 0 }
     ];

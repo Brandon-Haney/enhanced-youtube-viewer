@@ -102,6 +102,9 @@
             cornerDragState = null;
             if (cornerDragRafId !== null) { cancelAnimationFrame(cornerDragRafId); cornerDragRafId = null; }
             cornerResizeState = null;
+            tabDragState = null;
+            document.removeEventListener('mousemove', onCornerTabMouseMove, true);
+            document.removeEventListener('mouseup', onCornerTabMouseUp, true);
             cornerTuck = null;
             suppressNextCornerClick = false;
             resetAmbientVisuals();
@@ -523,6 +526,7 @@
     let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
     let cornerDragRafId = null; // rAF handle coalescing drag updates to one paint per frame
     let cornerResizeState = null; // Bookkeeping for an in-progress corner-player resize
+    let tabDragState = null; // Bookkeeping for a press-drag that pulls the mini out of the edge tab
     let stickyFlipCleanup = null; // Finalizer for an in-flight FLIP transition (clears the temp transform)
     let stickyFlipTimeoutId = null; // Safety-net timer to end a FLIP if transitionend never fires
     let cornerSnapTimeoutId = null; // Safety-net timer to end the drag-release snap transition
@@ -592,7 +596,15 @@
                 } else if (message.key === 'ambientTabGlow') {
                     ambientTabGlowEnabled = message.value;
                     settingsCache.ambientTabGlow = message.value;
-                    if (!message.value) clearTabAmbient();
+                    // If tucked right now, show/hide the frosted-video layer immediately (without
+                    // moving the tab); otherwise it takes effect on the next tuck via ensureCornerTab.
+                    const tabEl = document.getElementById('eyv-corner-tab');
+                    const vidEl = tabEl && tabEl.querySelector('#eyv-corner-tab-video');
+                    if (vidEl) {
+                        vidEl.style.display = message.value ? 'block' : 'none';
+                        if (message.value) { tabVideoCtx = vidEl.getContext('2d'); drawTabVideo(); }
+                        else tabVideoCtx = null;
+                    }
                     startAmbientSampler(); // (re)evaluates whether any feature still needs sampling
                 } else if (message.key === 'ambilightHalo') {
                     ambilightHaloEnabled = message.value;
@@ -1189,8 +1201,11 @@
         top = Math.max(0, Math.min(window.innerHeight - h, top));
         playerElementRef.style.left = `${left}px`;
         playerElementRef.style.top = `${top}px`;
+        const dragRect = { left, top, width: w, height: h, right: left + w, bottom: top + h };
+        // Keep the ambilight halo glued to the box this same frame (reuse dragRect — no reflow).
+        if (ambilightHaloEnabled && !cornerTuck && ambientHaloCanvas) positionAmbilightHalo(dragRect);
         // Preview from the values we just wrote — no getBoundingClientRect read, no reflow.
-        showSnapPreview({ left, top, width: w, height: h, right: left + w, bottom: top + h });
+        showSnapPreview(dragRect);
     }
 
     function onCornerMouseUp(e) {
@@ -1306,15 +1321,39 @@
         if (!tab) {
             tab = document.createElement('div');
             tab.id = 'eyv-corner-tab';
-            tab.title = 'Show mini-player';
+            tab.title = 'Click to restore, or drag to pull the mini-player out';
             tab.addEventListener('click', onCornerTabClick, true);
+            // Press-and-drag the tab to pull the mini out and move it like a touch handle.
+            tab.addEventListener('mousedown', onCornerTabMouseDown, true);
+            // Frosted live-video layer (behind) + carat (in front).
+            const vid = document.createElement('canvas');
+            vid.id = 'eyv-corner-tab-video';
+            vid.width = AMBIENT_W;
+            vid.height = AMBIENT_H;
+            const carat = document.createElement('span');
+            carat.className = 'eyv-corner-tab-carat';
+            tab.appendChild(vid);
+            tab.appendChild(carat);
             document.body.appendChild(tab);
         }
+        // Frosted video: show the layer only when the toggle is on (else the plain tab shows), and
+        // cache the canvas context for the sampler. Paint one frame now so it isn't blank on tuck.
+        const vid = tab.querySelector('#eyv-corner-tab-video');
+        if (vid) {
+            vid.style.display = ambientTabGlowEnabled ? 'block' : 'none';
+            if (ambientTabGlowEnabled) {
+                if (!tabVideoCtx || tabVideoCtx.canvas !== vid) tabVideoCtx = vid.getContext('2d');
+                drawTabVideo();
+            } else {
+                tabVideoCtx = null;
+            }
+        }
         // Carat points toward screen center (› when tucked left, ‹ when tucked right).
-        tab.textContent = side === 'left' ? '›' : '‹';
+        const carat = tab.querySelector('.eyv-corner-tab-carat');
+        if (carat) carat.textContent = side === 'left' ? '›' : '‹';
         tab.classList.toggle('eyv-corner-tab-left', side === 'left');
         tab.classList.toggle('eyv-corner-tab-right', side === 'right');
-        const tabH = 64;
+        const tabH = 72;
         const top = clampNum((centerY || window.innerHeight / 2) - tabH / 2, 8, window.innerHeight - tabH - 8);
         tab.style.top = `${top}px`;
         tab.style.left = side === 'left' ? '0px' : 'auto';
@@ -1330,6 +1369,67 @@
         e.preventDefault();
         e.stopPropagation();
         untuckCornerPlayer();
+    }
+
+    // --- DRAG THE EDGE TAB (touch-handle style) -----------------------------------------------
+    // Press the tab and drag to pull the mini back OUT and move it under the cursor, instead of
+    // only tap-to-restore. A no-move press still falls through to onCornerTabClick (tap = restore).
+    function onCornerTabMouseDown(e) {
+        if (e.button !== 0 || !playerElementRef || !cornerTuck) return;
+        // Don't preventDefault here: a press with no movement must remain a real click so the
+        // existing tap-to-restore (onCornerTabClick) still fires. We commit to a drag on first move.
+        tabDragState = { startX: e.clientX, startY: e.clientY, started: false };
+        document.addEventListener('mousemove', onCornerTabMouseMove, true);
+        document.addEventListener('mouseup', onCornerTabMouseUp, true);
+    }
+
+    function onCornerTabMouseMove(e) {
+        if (!tabDragState) return;
+        if (!tabDragState.started) {
+            if (Math.hypot(e.clientX - tabDragState.startX, e.clientY - tabDragState.startY) < 5) return;
+            tabDragState.started = true;
+            beginTabPullOut(e); // pop the mini out of the tab into a live drag under the cursor
+        }
+        onCornerMouseMove(e); // reuse the corner-drag move (rAF-throttled write + snap preview)
+    }
+
+    function onCornerTabMouseUp(e) {
+        document.removeEventListener('mousemove', onCornerTabMouseMove, true);
+        document.removeEventListener('mouseup', onCornerTabMouseUp, true);
+        const wasDragging = !!(tabDragState && tabDragState.started);
+        tabDragState = null;
+        // A real drag: finalize via the normal release (dock to an edge, or re-tuck if flung off).
+        // A no-move tap: do nothing — the native click fires onCornerTabClick → restore to last spot.
+        if (wasDragging) onCornerMouseUp(e);
+    }
+
+    // Untuck WITHOUT the snap glide and hand control to a live corner drag, so the mini appears
+    // under the cursor and follows it (like dragging a touch point). The tucked box still carries
+    // its corner size — tuck only hid it — so we can read that and re-center it on the pointer.
+    function beginTabPullOut(e) {
+        if (!playerElementRef) return;
+        const side = cornerTuck; // which edge it was tucked on (capture before clearing)
+        endCornerSnapAnim();
+        cornerTuck = null;
+        removeCornerTab();
+        clearTabAmbient();
+        playerElementRef.classList.remove('eyv-corner-tucked');
+        const rect = playerElementRef.getBoundingClientRect();
+        const w = rect.width || cornerWidth;
+        const h = rect.height || Math.round(w * 0.5625);
+        // Anchor the grabbed (docked) edge to the cursor so the box emerges INWARD from that side
+        // and follows the pointer; center it vertically on the cursor.
+        let left = side === 'left' ? e.clientX : e.clientX - w;
+        let top = e.clientY - h / 2;
+        // Same clamp as applyCornerDrag: allow partly past the sides so it can be re-flung to tuck.
+        left = Math.max(-w * 0.6, Math.min(window.innerWidth - w * 0.4, left));
+        top = Math.max(0, Math.min(window.innerHeight - h, top));
+        playerElementRef.style.left = `${left}px`;
+        playerElementRef.style.top = `${top}px`;
+        // Seed the corner-drag state (moved:true so the release docks/tucks rather than click-toggles).
+        cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: left, origTop: top, w, h, dx: 0, dy: 0, moved: true };
+        suppressNextCornerClick = true;
+        startAmbientSampler(); // mini is visible again → resume the halo
     }
 
     // --- AMBIENT VIDEO COLOR (dev/experimental) -------------------------------------------
@@ -1354,35 +1454,23 @@
         haloGrow: 0.02,      // halo size: fraction of the box the glow extends beyond the video
         haloBlur: 14,        // halo blur radius (px)
         haloOpacity: 0.7,    // halo opacity (0..1)
-        tabSmoothing: 0.16,  // tab color easing per sample (lower = calmer/slower drift)
-        tabVibrancy: 0.6,    // tab accent mix: 0 = muted (frame average), 1 = full vivid accent
-        tabGlowAlpha: 0.6,   // tab glow strength (0..1)
+        tabBlur: 6,          // frosted-video tab: blur radius (px)
+        tabBrightness: 0.9,  // frosted-video tab: brightness multiplier
+        tabSaturation: 1.2,  // frosted-video tab: saturation multiplier
         pulseSpeed: 2.4,     // tab pulse period (s); higher = slower
         pulseAmp: 16         // tab pulse peak glow radius (px); set low/0 for a subtle breath
     };
     // Maps a popup storage key -> the DEV_AMBIENT field it controls (used by load + SETTING_CHANGED).
     const AMBIENT_TUNING_KEYS = {
         ambHaloGrow: 'haloGrow', ambHaloBlur: 'haloBlur', ambHaloOpacity: 'haloOpacity',
-        ambTabSmoothing: 'tabSmoothing', ambTabVibrancy: 'tabVibrancy', ambTabGlowAlpha: 'tabGlowAlpha',
+        ambTabBlur: 'tabBlur', ambTabBrightness: 'tabBrightness', ambTabSaturation: 'tabSaturation',
         ambPulseSpeed: 'pulseSpeed', ambPulseAmp: 'pulseAmp'
     };
 
-    let ambientSampleCanvas = null, ambientSampleCtx = null; // for color analysis (tab glow)
+    let tabVideoCtx = null;       // 2d context of the frosted-video canvas inside the edge tab
     let ambientHaloCanvas = null, ambientHaloCtx = null;     // the blurred frame drawn behind the mini
     let ambientRafId = null;      // rAF handle for the sampler loop (null when idle)
     let ambientLastSampleTs = 0;  // timestamp of the last frame we actually sampled
-    let tabAmbientCurrent = null; // smoothed tab accent {r,g,b}; eases toward each new sample
-
-    function getAmbientSampleCtx() {
-        if (!ambientSampleCanvas) {
-            ambientSampleCanvas = document.createElement('canvas');
-            ambientSampleCanvas.width = AMBIENT_W;
-            ambientSampleCanvas.height = AMBIENT_H;
-            // willReadFrequently: hint the browser we'll getImageData every tick.
-            ambientSampleCtx = ambientSampleCanvas.getContext('2d', { willReadFrequently: true });
-        }
-        return ambientSampleCtx;
-    }
 
     // The live <video> if it's actually rendering frames we can sample (decoded + playing).
     function findAmbientVideo() {
@@ -1391,75 +1479,27 @@
         return (v && v.videoWidth > 0 && v.readyState >= 2 && !v.paused) ? v : null;
     }
 
-    // Reduce a downscaled frame to an average color plus a "vibrant" accent. The accent favors
-    // saturated, mid-bright pixels (so we get the punchy color iOS shows, not a muddy average);
-    // we fall back to the average when the frame has nothing vivid (e.g. greyscale footage).
-    function analyzeAmbientPixels(data) {
-        let rSum = 0, gSum = 0, bSum = 0, n = 0;
-        let best = null, bestScore = -1;
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i], g = data[i + 1], b = data[i + 2];
-            rSum += r; gSum += g; bSum += b; n++;
-            const max = Math.max(r, g, b), min = Math.min(r, g, b);
-            const sat = max === 0 ? 0 : (max - min) / max;   // 0..1
-            const lum = (max + min) / 510;                   // 0..1
-            // Peak score near mid luminance; penalize very dark / blown-out pixels.
-            const score = sat * (1 - Math.abs(lum - 0.55) * 1.4);
-            if (score > bestScore) { bestScore = score; best = { r, g, b }; }
-        }
-        if (!n) return null;
-        const avg = { r: Math.round(rSum / n), g: Math.round(gSum / n), b: Math.round(bSum / n) };
-        const rawAccent = (bestScore > 0.12 && best) ? best : avg;
-        // Tame vibrancy: blend the accent toward the frame average so it reads as a soft tint
-        // rather than a neon. tabVibrancy 1 = full vivid accent, 0 = muted (the average).
-        const v = clampNum(DEV_AMBIENT.tabVibrancy, 0, 1);
-        const accent = {
-            r: Math.round(rawAccent.r * v + avg.r * (1 - v)),
-            g: Math.round(rawAccent.g * v + avg.g * (1 - v)),
-            b: Math.round(rawAccent.b * v + avg.b * (1 - v))
-        };
-        return { avg, accent };
-    }
-
-    // Draw the current frame small and analyze it. Returns {avg, accent} or null (no frame / blocked).
-    function sampleAmbientFrame() {
+    // FEATURE 1 (FROSTED VIDEO TAB): draw the live frame into the small canvas behind the edge tab.
+    // The canvas is sized to the tab HEIGHT at the video's aspect (so it's wider than the 30px tab)
+    // and anchored to the docked side; the tab's overflow:hidden clips it to a sliver and CSS blurs
+    // it — so a frosted slice of the playing video shows at the screen edge (iOS now-playing style).
+    function drawTabVideo() {
+        if (!tabVideoCtx) return;
         const video = findAmbientVideo();
-        if (!video) return null;
-        const ctx = getAmbientSampleCtx();
-        if (!ctx) return null;
-        try {
-            ctx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H);
-            return analyzeAmbientPixels(ctx.getImageData(0, 0, AMBIENT_W, AMBIENT_H).data);
-        } catch (e) {
-            if (DEBUG) console.warn('[EYV] ambient sample failed (tainted/decoding?):', e);
-            return null;
-        }
+        if (!video) return;
+        try { tabVideoCtx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H); } catch (e) { /* keep last frame */ }
     }
 
-    // FEATURE 1: push an accent color into the edge-tuck tab via CSS custom properties.
-    // The tab's CSS uses var(--eyv-tab-accent, <red>) so clearing the vars restores the red.
-    function applyTabAmbient(c) {
-        const tab = document.getElementById('eyv-corner-tab');
-        if (!tab) return;
-        const rgb = `${c.r}, ${c.g}, ${c.b}`;
-        tab.style.setProperty('--eyv-tab-accent', `rgb(${rgb})`);
-        tab.style.setProperty('--eyv-tab-glow', `rgba(${rgb}, ${clampNum(DEV_AMBIENT.tabGlowAlpha, 0, 1)})`);
-    }
+    // The frosted-video canvas lives inside the tab, so removing the tab drops it too; this just
+    // clears our cached context. (Named clearTabAmbient for the existing untuck/pull-out callers.)
     function clearTabAmbient() {
-        tabAmbientCurrent = null; // restart the color smoothing fresh on the next tuck
-        const tab = document.getElementById('eyv-corner-tab');
-        if (!tab) return;
-        tab.style.removeProperty('--eyv-tab-accent');
-        tab.style.removeProperty('--eyv-tab-glow');
+        tabVideoCtx = null;
     }
 
     // FEATURE 2: position a low-res, blurred copy of the frame behind the corner mini so colored
     // light bleeds out around its edges. The canvas is tiny; CSS scales it up and blurs it (the
     // blur spills past the box, which is what produces the halo).
-    function applyAmbilightHalo() {
-        if (!playerElementRef) return;
-        const rect = playerElementRef.getBoundingClientRect();
-        if (!rect.width || !rect.height) return;
+    function ensureAmbilightCanvas() {
         if (!ambientHaloCanvas) {
             ambientHaloCanvas = document.createElement('canvas');
             ambientHaloCanvas.id = 'eyv-ambilight';
@@ -1470,18 +1510,41 @@
         } else if (!ambientHaloCanvas.isConnected) {
             document.body.appendChild(ambientHaloCanvas);
         }
-        const video = findAmbientVideo();
-        if (video && ambientHaloCtx) {
-            try { ambientHaloCtx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H); } catch (e) { /* keep last frame */ }
-        }
+        return ambientHaloCanvas;
+    }
+
+    // Cheap: glue the halo box to the mini. Called EVERY animation frame so it tracks the player
+    // in lockstep during drag/resize/snap — repositioning it only at the 6fps sample rate left the
+    // heavily-blurred glow lagging behind a fast drag (it smeared / ghosted). Pass an explicit rect
+    // (e.g. the one a drag already computed) to avoid a getBoundingClientRect reflow.
+    function positionAmbilightHalo(rect) {
+        if (!playerElementRef || !ambientHaloCanvas) return;
+        if (!rect) rect = playerElementRef.getBoundingClientRect();
+        const w = rect.width, h = rect.height;
+        if (!w || !h) return;
         // Grow the halo a touch beyond the player so the blur reads as a rim of light around it.
-        // Kept small by default (~2% of the box) so it's a subtle edge glow, not a large cloud
-        // spilling well past the video; tunable via DEV_AMBIENT.haloGrow.
-        const grow = Math.round(Math.min(rect.width, rect.height) * DEV_AMBIENT.haloGrow);
+        // Kept small by default (~2% of the box); tunable via DEV_AMBIENT.haloGrow.
+        const grow = Math.round(Math.min(w, h) * DEV_AMBIENT.haloGrow);
         ambientHaloCanvas.style.left = `${Math.round(rect.left - grow)}px`;
         ambientHaloCanvas.style.top = `${Math.round(rect.top - grow)}px`;
-        ambientHaloCanvas.style.width = `${Math.round(rect.width + grow * 2)}px`;
-        ambientHaloCanvas.style.height = `${Math.round(rect.height + grow * 2)}px`;
+        ambientHaloCanvas.style.width = `${Math.round(w + grow * 2)}px`;
+        ambientHaloCanvas.style.height = `${Math.round(h + grow * 2)}px`;
+    }
+
+    // Throttled: redraw the current video frame into the halo canvas (~6fps is plenty for a glow).
+    function drawAmbilightFrame() {
+        if (!ambientHaloCtx) return;
+        const video = findAmbientVideo();
+        if (!video) return;
+        try { ambientHaloCtx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H); } catch (e) { /* keep last frame */ }
+    }
+
+    // Full refresh (create + draw + position); used for the initial show and live slider changes.
+    function applyAmbilightHalo() {
+        if (!playerElementRef) return;
+        ensureAmbilightCanvas();
+        drawAmbilightFrame();
+        positionAmbilightHalo();
     }
     // Push the CSS-driven tuning knobs onto :root custom properties (they inherit to the tab and
     // halo, so changes apply instantly) and refresh the halo so size/blur/opacity update live.
@@ -1495,6 +1558,10 @@
             root.style.setProperty('--eyv-pulse-speed', `${DEV_AMBIENT.pulseSpeed}s`);
             root.style.setProperty('--eyv-pulse-max', `${DEV_AMBIENT.pulseAmp}px`);
             root.style.setProperty('--eyv-pulse-min', `${Math.round(DEV_AMBIENT.pulseAmp * 0.7)}px`);
+            // Frosted-video tab filter knobs.
+            root.style.setProperty('--eyv-tab-blur', `${DEV_AMBIENT.tabBlur}px`);
+            root.style.setProperty('--eyv-tab-brightness', `${DEV_AMBIENT.tabBrightness}`);
+            root.style.setProperty('--eyv-tab-saturate', `${DEV_AMBIENT.tabSaturation}`);
         }
         if (ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner')) {
             applyAmbilightHalo();
@@ -1514,29 +1581,25 @@
 
     function ambientTick(ts) {
         ambientRafId = null;
-        if (ts - ambientLastSampleTs >= 1000 / AMBIENT_FPS) {
-            ambientLastSampleTs = ts;
-            // Tab glow: only recolor on a fresh frame; keep the last color while paused.
-            if (ambientTabGlowEnabled && cornerTuck) {
-                const sample = sampleAmbientFrame();
-                if (sample) {
-                    // Ease toward the new accent (exponential moving average) so the tab color
-                    // drifts calmly instead of snapping every sample. Lower tabSmoothing = calmer.
-                    const t = tabAmbientCurrent || sample.accent;
-                    const k = clampNum(DEV_AMBIENT.tabSmoothing, 0.01, 1);
-                    tabAmbientCurrent = {
-                        r: Math.round(t.r + (sample.accent.r - t.r) * k),
-                        g: Math.round(t.g + (sample.accent.g - t.g) * k),
-                        b: Math.round(t.b + (sample.accent.b - t.b) * k)
-                    };
-                    applyTabAmbient(tabAmbientCurrent);
-                }
-            }
-            // Halo: always reposition to track the mini (it keeps its last frame when paused).
-            if (ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner')) {
-                applyAmbilightHalo();
-            }
+        const fresh = (ts - ambientLastSampleTs >= 1000 / AMBIENT_FPS);
+        if (fresh) ambientLastSampleTs = ts;
+
+        // Ambilight halo: REPOSITION every frame so it stays glued to the mini (no ghosting while
+        // dragging/snapping); only REDRAW the video frame on the throttled tick. During a live
+        // move-drag, applyCornerDrag already positions the halo from the rect it computed (no extra
+        // reflow), so we skip the layout-reading reposition here.
+        const haloShowing = ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner');
+        if (haloShowing) {
+            ensureAmbilightCanvas();
+            if (!(cornerDragState && cornerDragState.moved)) positionAmbilightHalo();
+            if (fresh) drawAmbilightFrame();
         }
+
+        // Frosted video tab: redraw the live frame into the tab canvas on the throttled tick.
+        if (fresh && ambientTabGlowEnabled && cornerTuck) {
+            drawTabVideo();
+        }
+
         // Self-terminating: only re-arm while a feature still needs us (and the tab is visible -
         // rAF naturally pauses in background tabs, so we never sample a hidden page).
         if (ambientSamplerActive()) ambientRafId = requestAnimationFrame(ambientTick);
@@ -1688,9 +1751,9 @@
         ambHaloGrow: null,
         ambHaloBlur: null,
         ambHaloOpacity: null,
-        ambTabSmoothing: null,
-        ambTabVibrancy: null,
-        ambTabGlowAlpha: null,
+        ambTabBlur: null,
+        ambTabBrightness: null,
+        ambTabSaturation: null,
         ambPulseSpeed: null,
         ambPulseAmp: null,
         loaded: false
@@ -1797,7 +1860,7 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo', 'ambHaloGrow', 'ambHaloBlur', 'ambHaloOpacity', 'ambTabSmoothing', 'ambTabVibrancy', 'ambTabGlowAlpha', 'ambPulseSpeed', 'ambPulseAmp'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo', 'ambHaloGrow', 'ambHaloBlur', 'ambHaloOpacity', 'ambTabBlur', 'ambTabBrightness', 'ambTabSaturation', 'ambPulseSpeed', 'ambPulseAmp'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
@@ -2256,6 +2319,7 @@
         stickyMode = 'top';
         cornerDragState = null;
         cornerResizeState = null;
+        tabDragState = null;
         if (playerElementRef) {
             // Restore player to original DOM position (moved to body during activation)
             if (originalPlayerParent && originalPlayerParent.isConnected) {
@@ -3571,6 +3635,7 @@
                 display: flex !important;
                 align-items: center !important;
                 justify-content: center !important;
+                overflow: hidden !important; /* clip the frosted-video layer to the tab sliver */
                 font-size: 26px !important;
                 font-weight: 800 !important;
                 line-height: 1 !important;
@@ -3588,6 +3653,26 @@
                 transition: background-color 0.6s ease, transform 0.15s ease, box-shadow 0.6s ease !important;
                 /* Gentle pulse to draw the eye to where the mini went; period/peak are dev-tunable. */
                 animation: eyv-tab-pulse var(--eyv-pulse-speed, 2.4s) ease-in-out infinite !important;
+            }
+            /* Frosted live-video layer: a low-res canvas scaled to the tab HEIGHT at 16:9 (so it's
+               wider than the 30px tab and clipped to a sliver), anchored to the docked side and
+               blurred. Sits behind the carat. Dev-tunable via --eyv-tab-blur/-brightness/-saturate. */
+            #eyv-corner-tab-video {
+                position: absolute !important;
+                top: 0 !important;
+                height: 100% !important;
+                width: auto !important;
+                z-index: 0 !important;
+                pointer-events: none !important;
+                filter: blur(var(--eyv-tab-blur, 6px)) brightness(var(--eyv-tab-brightness, 0.9)) saturate(var(--eyv-tab-saturate, 1.2)) !important;
+            }
+            #eyv-corner-tab.eyv-corner-tab-left #eyv-corner-tab-video { left: 0 !important; }
+            #eyv-corner-tab.eyv-corner-tab-right #eyv-corner-tab-video { right: 0 !important; }
+            .eyv-corner-tab-carat {
+                position: relative !important; /* above the frosted video */
+                z-index: 1 !important;
+                text-shadow: 0 1px 3px rgba(0,0,0,0.65) !important;
+                pointer-events: none !important;
             }
             #eyv-corner-tab:hover {
                 filter: brightness(1.12) !important;

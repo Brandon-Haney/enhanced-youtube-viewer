@@ -519,9 +519,8 @@
     // stickyCornerDock; migrated from the legacy stickyCorner corner string.
     let cornerDock = { edge: 'right', pos: 0.92 }; // default: right edge, near the bottom
     let cornerTuck = null; // Edge-tuck state: 'left' | 'right' when collapsed to a tab, else null
-    // Dev/experimental ambient-color features (sample the live video frame; see AMBIENT section).
-    let ambientTabGlowEnabled = false; // Color the edge-tuck tab from the video (iOS-style accent)
-    let ambilightHaloEnabled = false;  // Blurred video-frame halo behind the corner mini-player
+    // Dev/experimental frosted video tab (samples the live frame; see FROSTED VIDEO TAB section).
+    let ambientTabGlowEnabled = false; // Show a blurred slice of the video in the edge-tuck tab
     let cornerWidth = CORNER_DEFAULT_WIDTH; // Current mini-player width (px), persisted as stickyCornerWidth
     let cornerDragState = null; // Bookkeeping for an in-progress corner-player drag
     let cornerDragRafId = null; // rAF handle coalescing drag updates to one paint per frame
@@ -605,12 +604,7 @@
                         if (message.value) { tabVideoCtx = vidEl.getContext('2d'); drawTabVideo(); }
                         else tabVideoCtx = null;
                     }
-                    startAmbientSampler(); // (re)evaluates whether any feature still needs sampling
-                } else if (message.key === 'ambilightHalo') {
-                    ambilightHaloEnabled = message.value;
-                    settingsCache.ambilightHalo = message.value;
-                    if (!message.value) removeAmbilightHalo();
-                    startAmbientSampler();
+                    startAmbientSampler(); // (re)evaluates whether the frosted tab needs sampling
                 } else if (AMBIENT_TUNING_KEYS[message.key]) {
                     // DEV: live ambient-tuning slider changed — update the knob and re-apply.
                     const num = Number(message.value);
@@ -1202,8 +1196,6 @@
         playerElementRef.style.left = `${left}px`;
         playerElementRef.style.top = `${top}px`;
         const dragRect = { left, top, width: w, height: h, right: left + w, bottom: top + h };
-        // Keep the ambilight halo glued to the box this same frame (reuse dragRect — no reflow).
-        if (ambilightHaloEnabled && !cornerTuck && ambientHaloCanvas) positionAmbilightHalo(dragRect);
         // Preview from the values we just wrote — no getBoundingClientRect read, no reflow.
         showSnapPreview(dragRect);
     }
@@ -1298,8 +1290,7 @@
         removeCornerResizeHandle();
         playerElementRef.classList.add('eyv-corner-tucked');
         ensureCornerTab(side, cy);
-        // The mini is hidden now; drop its halo and (if enabled) start tinting the tab instead.
-        removeAmbilightHalo();
+        // The mini is hidden now; start the frosted-tab sampler (if the feature is on).
         startAmbientSampler();
     }
 
@@ -1311,8 +1302,7 @@
         playerElementRef.classList.remove('eyv-corner-tucked');
         startCornerSnapAnim();
         centerStickyPlayer(playerElementRef);
-        // Back to a visible mini: resume the halo (if enabled).
-        startAmbientSampler();
+        // No longer tucked → the frosted-tab sampler self-terminates on its next frame.
     }
 
     // The edge tab: a small rounded chip on the screen edge with a carat pointing inward.
@@ -1429,43 +1419,31 @@
         // Seed the corner-drag state (moved:true so the release docks/tucks rather than click-toggles).
         cornerDragState = { startX: e.clientX, startY: e.clientY, origLeft: left, origTop: top, w, h, dx: 0, dy: 0, moved: true };
         suppressNextCornerClick = true;
-        startAmbientSampler(); // mini is visible again → resume the halo
     }
 
-    // --- AMBIENT VIDEO COLOR (dev/experimental) -------------------------------------------
-    // Two opt-in toggles that derive color from the CURRENTLY PLAYING frame, the way iOS does
-    // its now-playing ambient effect:
-    //   1) ambientTabGlow  - recolor the edge-tuck tab + glow from a vibrant accent in the frame.
-    //   2) ambilightHalo   - draw a low-res, heavily-blurred copy of the frame behind the corner
-    //                        mini-player so colored light appears to spill out around it.
-    // Both share one throttled sampler. YouTube serves video through MSE/blob URLs (same-origin),
-    // so drawImage(<video>) does NOT taint the canvas and getImageData() is readable; if a frame
-    // ever does throw a SecurityError we just skip it and keep the static fallback (red tab).
-    const AMBIENT_FPS = 6;        // a glow needs nowhere near 60fps; this keeps it cheap on battery
-    const AMBIENT_W = 32;         // tiny sample buffer - we only want dominant color, not detail
+    // --- FROSTED VIDEO TAB (dev/experimental) ---------------------------------------------
+    // One opt-in toggle (ambientTabGlow) that shows a blurred slice of the CURRENTLY PLAYING frame
+    // in the edge-tuck tab, the way iOS does its now-playing ambient effect. YouTube serves video
+    // through MSE/blob URLs (same-origin), so drawImage(<video>) does NOT taint the canvas; if a
+    // frame ever throws a SecurityError we skip it and keep the last drawn frame.
+    const AMBIENT_FPS = 6;        // a frosted glow needs nowhere near 60fps; cheap on battery
+    const AMBIENT_W = 32;         // tiny sample buffer - just enough for a blurred sliver
     const AMBIENT_H = 18;         // ~16:9
 
-    // DEV/EXPERIMENTAL tuning knobs for the ambient features. These are wired to live sliders in
-    // the popup ("Ambient Tuning") so good values can be dialed in by eye, then the chosen numbers
-    // hardcoded here and the sliders removed. The defaults below are the tamed baseline. The
-    // CSS-driven knobs (halo blur/opacity, tab blur/brightness/saturation) are mirrored to :root
-    // custom properties by applyAmbientTuning(); the JS-driven knobs are read inline where used.
+    // DEV/EXPERIMENTAL tuning knobs for the frosted tab. Wired to live sliders in the popup
+    // ("Ambient Tuning") so good values can be dialed in by eye, then hardcoded here and the
+    // sliders removed. Mirrored to :root custom properties by applyAmbientTuning().
     const DEV_AMBIENT = {
-        haloGrow: 0.02,      // halo size: fraction of the box the glow extends beyond the video
-        haloBlur: 14,        // halo blur radius (px)
-        haloOpacity: 0.7,    // halo opacity (0..1)
         tabBlur: 6,          // frosted-video tab: blur radius (px)
         tabBrightness: 0.9,  // frosted-video tab: brightness multiplier
         tabSaturation: 1.2   // frosted-video tab: saturation multiplier
     };
     // Maps a popup storage key -> the DEV_AMBIENT field it controls (used by load + SETTING_CHANGED).
     const AMBIENT_TUNING_KEYS = {
-        ambHaloGrow: 'haloGrow', ambHaloBlur: 'haloBlur', ambHaloOpacity: 'haloOpacity',
         ambTabBlur: 'tabBlur', ambTabBrightness: 'tabBrightness', ambTabSaturation: 'tabSaturation'
     };
 
     let tabVideoCtx = null;       // 2d context of the frosted-video canvas inside the edge tab
-    let ambientHaloCanvas = null, ambientHaloCtx = null;     // the blurred frame drawn behind the mini
     let ambientRafId = null;      // rAF handle for the sampler loop (null when idle)
     let ambientLastSampleTs = 0;  // timestamp of the last frame we actually sampled
 
@@ -1493,101 +1471,26 @@
         tabVideoCtx = null;
     }
 
-    // FEATURE 2: position a low-res, blurred copy of the frame behind the corner mini so colored
-    // light bleeds out around its edges. The canvas is tiny; CSS scales it up and blurs it (the
-    // blur spills past the box, which is what produces the halo).
-    function ensureAmbilightCanvas() {
-        if (!ambientHaloCanvas) {
-            ambientHaloCanvas = document.createElement('canvas');
-            ambientHaloCanvas.id = 'eyv-ambilight';
-            ambientHaloCanvas.width = AMBIENT_W;
-            ambientHaloCanvas.height = AMBIENT_H;
-            ambientHaloCtx = ambientHaloCanvas.getContext('2d');
-            document.body.appendChild(ambientHaloCanvas);
-        } else if (!ambientHaloCanvas.isConnected) {
-            document.body.appendChild(ambientHaloCanvas);
-        }
-        return ambientHaloCanvas;
-    }
-
-    // Cheap: glue the halo box to the mini. Called EVERY animation frame so it tracks the player
-    // in lockstep during drag/resize/snap — repositioning it only at the 6fps sample rate left the
-    // heavily-blurred glow lagging behind a fast drag (it smeared / ghosted). Pass an explicit rect
-    // (e.g. the one a drag already computed) to avoid a getBoundingClientRect reflow.
-    function positionAmbilightHalo(rect) {
-        if (!playerElementRef || !ambientHaloCanvas) return;
-        if (!rect) rect = playerElementRef.getBoundingClientRect();
-        const w = rect.width, h = rect.height;
-        if (!w || !h) return;
-        // Grow the halo a touch beyond the player so the blur reads as a rim of light around it.
-        // Kept small by default (~2% of the box); tunable via DEV_AMBIENT.haloGrow.
-        const grow = Math.round(Math.min(w, h) * DEV_AMBIENT.haloGrow);
-        ambientHaloCanvas.style.left = `${Math.round(rect.left - grow)}px`;
-        ambientHaloCanvas.style.top = `${Math.round(rect.top - grow)}px`;
-        ambientHaloCanvas.style.width = `${Math.round(w + grow * 2)}px`;
-        ambientHaloCanvas.style.height = `${Math.round(h + grow * 2)}px`;
-    }
-
-    // Throttled: redraw the current video frame into the halo canvas (~6fps is plenty for a glow).
-    function drawAmbilightFrame() {
-        if (!ambientHaloCtx) return;
-        const video = findAmbientVideo();
-        if (!video) return;
-        try { ambientHaloCtx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H); } catch (e) { /* keep last frame */ }
-    }
-
-    // Full refresh (create + draw + position); used for the initial show and live slider changes.
-    function applyAmbilightHalo() {
-        if (!playerElementRef) return;
-        ensureAmbilightCanvas();
-        drawAmbilightFrame();
-        positionAmbilightHalo();
-    }
-    // Push the CSS-driven tuning knobs onto :root custom properties (they inherit to the tab and
-    // halo, so changes apply instantly) and refresh the halo so size/blur/opacity update live.
-    // JS-driven knobs (smoothing, vibrancy, grow, glow alpha) are read where they're used, so
-    // they take effect on the next sample/tick automatically.
+    // Mirror the frosted-tab filter knobs onto :root custom properties (they inherit to the tab,
+    // so slider changes apply instantly).
     function applyAmbientTuning() {
         const root = document.documentElement;
         if (root && root.style) {
-            root.style.setProperty('--eyv-halo-blur', `${DEV_AMBIENT.haloBlur}px`);
-            root.style.setProperty('--eyv-halo-opacity', `${DEV_AMBIENT.haloOpacity}`);
-            // Frosted-video tab filter knobs.
             root.style.setProperty('--eyv-tab-blur', `${DEV_AMBIENT.tabBlur}px`);
             root.style.setProperty('--eyv-tab-brightness', `${DEV_AMBIENT.tabBrightness}`);
             root.style.setProperty('--eyv-tab-saturate', `${DEV_AMBIENT.tabSaturation}`);
         }
-        if (ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner')) {
-            applyAmbilightHalo();
-        }
     }
 
-    function removeAmbilightHalo() {
-        ambientHaloCanvas?.remove();
-    }
-
-    // True while at least one ambient feature has visible work to do right now.
+    // True while the frosted tab has visible work to do right now (tucked + feature on).
     function ambientSamplerActive() {
-        const inCorner = playerElementRef?.classList.contains('eyv-player-corner');
-        return (ambientTabGlowEnabled && !!cornerTuck)
-            || (ambilightHaloEnabled && inCorner && !cornerTuck);
+        return ambientTabGlowEnabled && !!cornerTuck;
     }
 
     function ambientTick(ts) {
         ambientRafId = null;
         const fresh = (ts - ambientLastSampleTs >= 1000 / AMBIENT_FPS);
         if (fresh) ambientLastSampleTs = ts;
-
-        // Ambilight halo: REPOSITION every frame so it stays glued to the mini (no ghosting while
-        // dragging/snapping); only REDRAW the video frame on the throttled tick. During a live
-        // move-drag, applyCornerDrag already positions the halo from the rect it computed (no extra
-        // reflow), so we skip the layout-reading reposition here.
-        const haloShowing = ambilightHaloEnabled && !cornerTuck && playerElementRef?.classList.contains('eyv-player-corner');
-        if (haloShowing) {
-            ensureAmbilightCanvas();
-            if (!(cornerDragState && cornerDragState.moved)) positionAmbilightHalo();
-            if (fresh) drawAmbilightFrame();
-        }
 
         // Frosted video tab: redraw the live frame into the tab canvas on the throttled tick.
         if (fresh && ambientTabGlowEnabled && cornerTuck) {
@@ -1609,10 +1512,9 @@
     function stopAmbientSampler() {
         if (ambientRafId != null) { cancelAnimationFrame(ambientRafId); ambientRafId = null; }
     }
-    // Stop sampling and tear down every ambient visual (used on full teardown / feature-off).
+    // Stop sampling and clear the frosted-tab state (used on full teardown / feature-off).
     function resetAmbientVisuals() {
         stopAmbientSampler();
-        removeAmbilightHalo();
         clearTabAmbient();
     }
 
@@ -1740,11 +1642,7 @@
         stickyCornerDock: null,
         stickyCornerWidth: null,
         ambientTabGlow: null,
-        ambilightHalo: null,
-        // DEV: ambient-tuning slider values (null until the user moves a slider).
-        ambHaloGrow: null,
-        ambHaloBlur: null,
-        ambHaloOpacity: null,
+        // DEV: frosted-tab tuning slider values (null until the user moves a slider).
         ambTabBlur: null,
         ambTabBrightness: null,
         ambTabSaturation: null,
@@ -1852,7 +1750,7 @@
             if (DEBUG) console.log('[EYV DBG] All controls found, initializing features...');
 
                 // Load ALL settings FIRST (in one call to avoid cache issues), then create buttons
-                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambilightHalo', 'ambHaloGrow', 'ambHaloBlur', 'ambHaloOpacity', 'ambTabBlur', 'ambTabBrightness', 'ambTabSaturation'])
+                loadSettings(['stickyPlayerEnabled', 'pipEnabled', 'defaultStickyEnabled', 'inactiveWhenPaused', 'inactiveAtEnd', 'stickyOnScroll', 'stickyCorner', 'stickyCornerDock', 'stickyCornerWidth', 'ambientTabGlow', 'ambTabBlur', 'ambTabBrightness', 'ambTabSaturation'])
                     .then(settings => {
                         stickyPlayerEnabled = settings.stickyPlayerEnabled !== false; // Default to true
                         pipEnabled = settings.pipEnabled !== false; // Default to true
@@ -1860,8 +1758,7 @@
                         inactiveAtEndEnabled = !!(settings && settings.inactiveAtEnd);
                         stickyOnScrollEnabled = !!(settings && settings.stickyOnScroll);
                         ambientTabGlowEnabled = !!(settings && settings.ambientTabGlow);
-                        ambilightHaloEnabled = !!(settings && settings.ambilightHalo);
-                        // DEV: override the ambient-tuning defaults with any saved slider values.
+                        // DEV: override the frosted-tab tuning defaults with any saved slider values.
                         for (const sk in AMBIENT_TUNING_KEYS) {
                             const saved = settings && settings[sk];
                             if (saved != null && !Number.isNaN(Number(saved))) {
@@ -2752,7 +2649,6 @@
                 // `rect` is the player's inline position captured above, before the move to body.
                 if (stickyMode === 'corner') {
                     flipStickyTransition(playerElement, rect);
-                    startAmbientSampler(); // dev: ambilight halo behind the mini
                 }
                 // SECURITY: innerHTML is safe here - pinSVGIconActive is a static SVG string constant (no user input)
                 button.classList.add('active'); button.innerHTML = pinSVGIconActive;
@@ -3676,22 +3572,6 @@
                 padding-left: 3px !important;
                 transform-origin: right center !important;
             }
-            /* Ambilight halo (dev): a low-res frame copy behind the corner mini, blurred so the
-               video's colors spill out around it. Sits one layer below the player (z 9998). */
-            #eyv-ambilight {
-                position: fixed !important;
-                z-index: ${zIndex - 1} !important;
-                border-radius: 18px !important;
-                filter: blur(var(--eyv-halo-blur, 14px)) saturate(1.4) !important;
-                opacity: var(--eyv-halo-opacity, 0.7) !important;
-                pointer-events: none !important;
-                will-change: left, top, width, height !important;
-                transition: opacity 0.3s ease !important;
-            }
-            @media (prefers-reduced-motion: reduce) {
-                #eyv-ambilight { transition: none !important; }
-            }
-
             /* FIX: Removed '>' to select descendants, not just direct children */
             /* FIX: Add #container and direct child div to the allow-list for click-through */
             .eyv-player-fixed > div:not(#eyv-resize-handle),

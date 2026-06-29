@@ -17,7 +17,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const inactiveWhenPausedToggle = document.getElementById('inactiveWhenPausedToggle');
     const inactiveAtEndToggle = document.getElementById('inactiveAtEndToggle');
     const ambientTabGlowToggle = document.getElementById('ambientTabGlowToggle');
-    const ambilightHaloToggle = document.getElementById('ambilightHaloToggle');
     const versionText = document.getElementById('versionText');
     const saveIndicator = document.getElementById('saveIndicator');
 
@@ -91,7 +90,6 @@ document.addEventListener('DOMContentLoaded', function() {
     let inactiveWhenPausedTimer = null;
     let inactiveAtEndTimer = null;
     let ambientTabGlowTimer = null;
-    let ambilightHaloTimer = null;
 
     // Set version dynamically with error handling
     if (versionText) {
@@ -167,11 +165,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 inactiveWhenPaused: false,
                 inactiveAtEnd: false,
                 ambientTabGlow: false,
-                ambilightHalo: false,
-                // DEV ambient-tuning slider values (defaults mirror DEV_AMBIENT in content.js).
-                ambHaloGrow: 0.02,
-                ambHaloBlur: 14,
-                ambHaloOpacity: 0.7,
+                // DEV frosted-tab tuning slider values (defaults mirror DEV_AMBIENT in content.js).
                 ambTabBlur: 6,
                 ambTabBrightness: 0.9,
                 ambTabSaturation: 1.2
@@ -198,7 +192,6 @@ document.addEventListener('DOMContentLoaded', function() {
         inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
         inactiveAtEndToggle.checked = result.inactiveAtEnd;
         if (ambientTabGlowToggle) ambientTabGlowToggle.checked = result.ambientTabGlow;
-        if (ambilightHaloToggle) ambilightHaloToggle.checked = result.ambilightHalo;
         setupAmbientSliders(result); // DEV: initialize ambient-tuning sliders from saved values
 
         // Update action cards with null checks
@@ -489,52 +482,11 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Save preference when 'ambilightHaloToggle' changes (dev/experimental)
-    if (ambilightHaloToggle) {
-        ambilightHaloToggle.addEventListener('change', function() {
-            const newValue = this.checked;
-            const toggle = this;
-
-            // Debounce to prevent rapid concurrent writes
-            if (ambilightHaloTimer) clearTimeout(ambilightHaloTimer);
-            ambilightHaloTimer = setTimeout(() => {
-                storageWithTimeout(() => {
-                    return new Promise((resolve, reject) => {
-                        chrome.storage.local.set({ambilightHalo: newValue}, () => {
-                            if (chrome.runtime.lastError) {
-                                reject(chrome.runtime.lastError);
-                            } else {
-                                resolve();
-                            }
-                        });
-                    });
-                })
-                .then(() => {
-                    if (!isChromeContextValid()) return;
-                    showSaveConfirmation();
-                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'ambilightHalo', value: newValue });
-                })
-                .catch(error => {
-                    console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI - the write failed
-                    if (error.message && error.message.includes('QUOTA')) {
-                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-                    } else if (error.message && error.message.includes('timeout')) {
-                        showStatus('Storage operation timed out. Please try again.', true);
-                    }
-                });
-            }, DEBOUNCE_MS);
-        });
-    }
-
-    // --- DEV / Experimental: ambient-tuning sliders ----------------------------------------------
+    // --- DEV / Experimental: frosted-tab tuning sliders ------------------------------------------
     // Live-preview while dragging (throttled SETTING_CHANGED messages), persist on a short debounce.
     // "Copy values" puts a ready-to-hardcode DEV_AMBIENT snippet on the clipboard. Remove this whole
     // block (and the markup/styles) once the chosen values are baked into content.js.
     const AMBIENT_SLIDERS = [
-        { id: 'ambHaloGrowSlider',     key: 'ambHaloGrow',     field: 'haloGrow',     def: 0.02, dec: 3 },
-        { id: 'ambHaloBlurSlider',     key: 'ambHaloBlur',     field: 'haloBlur',     def: 14,   dec: 0 },
-        { id: 'ambHaloOpacitySlider',  key: 'ambHaloOpacity',  field: 'haloOpacity',  def: 0.7,  dec: 2 },
         { id: 'ambTabBlurSlider',       key: 'ambTabBlur',       field: 'tabBlur',       def: 6,    dec: 0 },
         { id: 'ambTabBrightnessSlider', key: 'ambTabBrightness', field: 'tabBrightness', def: 0.9,  dec: 2 },
         { id: 'ambTabSaturationSlider', key: 'ambTabSaturation', field: 'tabSaturation', def: 1.2,  dec: 2 }

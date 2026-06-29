@@ -88,36 +88,11 @@
                 </label>
             </div>
 
-            <div class="setting-card">
-                <div class="setting-info">
-                    <div class="setting-name">Ambilight Halo</div>
-                    <div class="setting-hint">Blurred video-frame glow spills out behind the corner mini-player</div>
-                </div>
-                <label class="checkbox">
-                    <input type="checkbox" id="ambilightHaloToggle">
-                    <span class="checkbox-box"></span>
-                </label>
-            </div>
-
-            <!-- DEV: live ambient-tuning sliders. Dial values in by eye on an open YouTube tab,
+            <!-- DEV: live frosted-tab tuning sliders. Dial values in by eye on an open YouTube tab,
                  then "Copy values" and hardcode them into DEV_AMBIENT in content.js. -->
             <div class="setting-card dev-tuning-card">
-                <div class="setting-name">Ambient Tuning <span class="dev-badge">live</span></div>
-                <div class="setting-hint">Drag to preview live on an open YouTube tab. Tune the halo and the frosted video tab, then hit “Copy values”.</div>
-
-                <div class="dev-group-label">Ambilight halo</div>
-                <div class="dev-slider">
-                    <label for="ambHaloGrowSlider">Halo size <span id="ambHaloGrowSliderVal">0.020</span></label>
-                    <input type="range" id="ambHaloGrowSlider" min="0" max="0.15" step="0.005">
-                </div>
-                <div class="dev-slider">
-                    <label for="ambHaloBlurSlider">Halo blur (px) <span id="ambHaloBlurSliderVal">14</span></label>
-                    <input type="range" id="ambHaloBlurSlider" min="0" max="40" step="1">
-                </div>
-                <div class="dev-slider">
-                    <label for="ambHaloOpacitySlider">Halo opacity <span id="ambHaloOpacitySliderVal">0.70</span></label>
-                    <input type="range" id="ambHaloOpacitySlider" min="0" max="1" step="0.05">
-                </div>
+                <div class="setting-name">Frosted Tab Tuning <span class="dev-badge">live</span></div>
+                <div class="setting-hint">Drag to preview live on an open YouTube tab. Tune the frosted video tab, then hit “Copy values”.</div>
 
                 <div class="dev-group-label">Frosted video tab</div>
                 <div class="dev-slider">

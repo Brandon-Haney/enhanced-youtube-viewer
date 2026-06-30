@@ -16,75 +16,98 @@
             <div class="subtitle">Control your viewing experience</div>
         </div>
         <div class="content">
-            <div class="quick-actions">
-                <div class="action-card" id="stickyPlayerCard">
-                    <div class="action-icon">📌</div>
-                    <div class="action-title">Sticky Player</div>
-                    <div class="action-status">Enabled</div>
+            <div class="settings-label">Player buttons</div>
+
+            <!-- Pin Video: master toggle (adds the pin button to YouTube's controls) with its
+                 automations nested underneath. The nested block dims when Pin Video is off,
+                 because none of the automations can fire without the button. -->
+            <div class="feature-card">
+                <div class="feature-head">
+                    <div class="feature-icon">📌</div>
+                    <div class="setting-info">
+                        <div class="setting-name">Pin Video</div>
+                        <div class="setting-hint">Adds a pin button to the player</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="stickyPlayerToggle">
+                        <span class="switch-track"></span>
+                        <span class="switch-thumb"></span>
+                    </label>
                 </div>
-                <div class="action-card" id="pipCard">
-                    <div class="action-icon">🖼️</div>
-                    <div class="action-title">Picture-in-Picture</div>
-                    <div class="action-status">Enabled</div>
+                <div class="feature-kids" id="pinChildren">
+                    <div class="kids-label">Do it automatically</div>
+                    <div class="kid-row">
+                        <div class="setting-info">
+                            <div class="setting-name">Pin on page load</div>
+                            <div class="setting-hint">Start pinned to the top on open</div>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="defaultStickyToggle">
+                            <span class="switch-track"></span>
+                            <span class="switch-thumb"></span>
+                        </label>
+                    </div>
+                    <div class="kid-row">
+                        <div class="setting-info">
+                            <div class="setting-name">Shrink to corner on scroll</div>
+                            <div class="setting-hint">Float a draggable mini-player as you scroll</div>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="stickyOnScrollToggle">
+                            <span class="switch-track"></span>
+                            <span class="switch-thumb"></span>
+                        </label>
+                    </div>
+                    <div class="kids-label">Then unpin when…</div>
+                    <div class="kid-row">
+                        <div class="setting-info">
+                            <div class="setting-name">The video is paused</div>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="inactiveWhenPausedToggle">
+                            <span class="switch-track"></span>
+                            <span class="switch-thumb"></span>
+                        </label>
+                    </div>
+                    <div class="kid-row">
+                        <div class="setting-info">
+                            <div class="setting-name">The video ends</div>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="inactiveAtEndToggle">
+                            <span class="switch-track"></span>
+                            <span class="switch-thumb"></span>
+                        </label>
+                    </div>
                 </div>
             </div>
 
-            <div class="settings-label">Sticky Player Options</div>
-
+            <!-- Picture-in-Picture: standalone button, no automations. -->
             <div class="setting-card">
+                <div class="feature-icon">🖼️</div>
                 <div class="setting-info">
-                    <div class="setting-name">Auto-Activate</div>
-                    <div class="setting-hint">Start in sticky mode on page load</div>
+                    <div class="setting-name">Picture-in-Picture</div>
+                    <div class="setting-hint">Adds a pop-out button to the player</div>
                 </div>
-                <label class="checkbox">
-                    <input type="checkbox" id="defaultStickyToggle">
-                    <span class="checkbox-box"></span>
+                <label class="switch">
+                    <input type="checkbox" id="pipToggle">
+                    <span class="switch-track"></span>
+                    <span class="switch-thumb"></span>
                 </label>
             </div>
 
-            <div class="setting-card">
-                <div class="setting-info">
-                    <div class="setting-name">Stick on Scroll</div>
-                    <div class="setting-hint">Shrink to a draggable, resizable corner player as you scroll</div>
-                </div>
-                <label class="checkbox">
-                    <input type="checkbox" id="stickyOnScrollToggle">
-                    <span class="checkbox-box"></span>
-                </label>
-            </div>
+            <div class="settings-label spaced">Experimental</div>
 
             <div class="setting-card">
-                <div class="setting-info">
-                    <div class="setting-name">Pause Deactivation</div>
-                    <div class="setting-hint">Turn off sticky when video pauses</div>
-                </div>
-                <label class="checkbox">
-                    <input type="checkbox" id="inactiveWhenPausedToggle">
-                    <span class="checkbox-box"></span>
-                </label>
-            </div>
-
-            <div class="setting-card">
-                <div class="setting-info">
-                    <div class="setting-name">End Deactivation</div>
-                    <div class="setting-hint">Turn off sticky when video ends</div>
-                </div>
-                <label class="checkbox">
-                    <input type="checkbox" id="inactiveAtEndToggle">
-                    <span class="checkbox-box"></span>
-                </label>
-            </div>
-
-            <div class="settings-label">Dev / Experimental</div>
-
-            <div class="setting-card">
+                <div class="feature-icon">❄️</div>
                 <div class="setting-info">
                     <div class="setting-name">Frosted Video Tab</div>
                     <div class="setting-hint">Edge-tuck tab shows a blurred slice of the live video (iOS-style)</div>
                 </div>
-                <label class="checkbox">
+                <label class="switch">
                     <input type="checkbox" id="ambientTabGlowToggle">
-                    <span class="checkbox-box"></span>
+                    <span class="switch-track"></span>
+                    <span class="switch-thumb"></span>
                 </label>
             </div>
 

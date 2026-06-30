@@ -665,10 +665,10 @@
                                 stickyButtonElement = createStickyButtonLogic(player, videoElement);
                                 Object.assign(stickyButtonElement, {
                                     className: 'ytp-button eyv-player-button',
-                                    title: 'Toggle Sticky Player',
+                                    title: 'Pin video',
                                     innerHTML: pinSVGIcon
                                 });
-                                stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                                stickyButtonElement.setAttribute('aria-label', 'Pin video');
                                 stickyButtonElement.style.display = 'inline-flex';
 
                                 // FIX: Sync dimension immediately
@@ -1789,8 +1789,8 @@
                             stickyButtonElement = createStickyButtonLogic(player, videoElement);
                             stickyButtonElement.className = 'ytp-button eyv-player-button';
                             stickyButtonElement.innerHTML = pinSVGIcon;
-                            stickyButtonElement.title = 'Toggle Sticky Player';
-                            stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                            stickyButtonElement.title = 'Pin video';
+                            stickyButtonElement.setAttribute('aria-label', 'Pin video');
                             // Set display (will be shown when inserted on hover)
                             stickyButtonElement.style.display = 'inline-flex';
                         } else if (stickyButtonElement && !stickyPlayerEnabled) {
@@ -1828,8 +1828,8 @@
                         stickyButtonElement = playerRightControls.querySelector('.eyv-player-button');
                         if (!stickyButtonElement) {
                             stickyButtonElement = createStickyButtonLogic(player, videoElement);
-                            Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Toggle Sticky Player', innerHTML: pinSVGIcon });
-                            stickyButtonElement.setAttribute('aria-label', 'Toggle Sticky Player');
+                            Object.assign(stickyButtonElement, { className: 'ytp-button eyv-player-button', title: 'Pin video', innerHTML: pinSVGIcon });
+                            stickyButtonElement.setAttribute('aria-label', 'Pin video');
                         }
 
                         let pipBtnInstance = playerRightControls.querySelector('.eyv-pip-button');

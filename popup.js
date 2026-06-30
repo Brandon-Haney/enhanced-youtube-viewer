@@ -10,8 +10,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Get DOM elements
-    const stickyPlayerCard = document.getElementById('stickyPlayerCard');
-    const pipCard = document.getElementById('pipCard');
+    const stickyPlayerToggle = document.getElementById('stickyPlayerToggle');
+    const pipToggle = document.getElementById('pipToggle');
+    const pinChildren = document.getElementById('pinChildren');
     const defaultStickyToggle = document.getElementById('defaultStickyToggle');
     const stickyOnScrollToggle = document.getElementById('stickyOnScrollToggle');
     const inactiveWhenPausedToggle = document.getElementById('inactiveWhenPausedToggle');
@@ -21,7 +22,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const saveIndicator = document.getElementById('saveIndicator');
 
     // Validate critical DOM elements exist
-    if (!stickyPlayerCard || !pipCard || !defaultStickyToggle || !stickyOnScrollToggle || !inactiveWhenPausedToggle || !inactiveAtEndToggle) {
+    if (!stickyPlayerToggle || !pipToggle || !defaultStickyToggle || !stickyOnScrollToggle || !inactiveWhenPausedToggle || !inactiveAtEndToggle) {
         console.error('[EYV Popup] Critical DOM elements missing');
         return;
     }
@@ -84,12 +85,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Debounce timers for settings to prevent write race conditions
-    let defaultStickyTimer = null;
-    let stickyOnScrollTimer = null;
-    let inactiveWhenPausedTimer = null;
-    let inactiveAtEndTimer = null;
-    let ambientTabGlowTimer = null;
+    // Per-key debounce timers to prevent write race conditions
+    const timers = {};
 
     // Set version dynamically with error handling
     if (versionText) {
@@ -143,15 +140,14 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Update action card UI based on enabled state
-    function updateActionCardUI(card, statusElement, isEnabled) {
-        if (isEnabled) {
-            card.classList.add('active');
-            statusElement.textContent = 'Enabled';
-        } else {
-            card.classList.remove('active');
-            statusElement.textContent = 'Disabled';
-        }
+    // Dim + lock the nested pin automations to mirror whether the Pin Video button exists.
+    // (Reads the live checkbox state, so callers don't need to pass the value.)
+    function updatePinChildrenState() {
+        const on = !!stickyPlayerToggle.checked;
+        if (pinChildren) pinChildren.classList.toggle('disabled', !on);
+        [defaultStickyToggle, stickyOnScrollToggle, inactiveWhenPausedToggle, inactiveAtEndToggle].forEach(el => {
+            if (el) el.disabled = !on;
+        });
     }
 
     // Load saved preferences for all settings with explicit defaults
@@ -183,118 +179,45 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!isChromeContextValid()) {
             return;
         }
-        console.log('[EYV Popup] Loaded settings:', result);
+        if (DEBUG) console.log('[EYV Popup] Loaded settings:', result);
 
-        // Initialize checkboxes first - independent of the action-card status spans, so a
-        // missing status span never leaves the toggles displaying their HTML default.
+        stickyPlayerToggle.checked = result.stickyPlayerEnabled;
+        pipToggle.checked = result.pipEnabled;
         defaultStickyToggle.checked = result.defaultStickyEnabled;
         stickyOnScrollToggle.checked = result.stickyOnScroll;
         inactiveWhenPausedToggle.checked = result.inactiveWhenPaused;
         inactiveAtEndToggle.checked = result.inactiveAtEnd;
         if (ambientTabGlowToggle) ambientTabGlowToggle.checked = result.ambientTabGlow;
-        setupAmbientSliders(result); // DEV: initialize ambient-tuning sliders from saved values
 
-        // Update action cards with null checks
-        const stickyStatus = stickyPlayerCard.querySelector('.action-status');
-        const pipStatus = pipCard.querySelector('.action-status');
-        if (!stickyStatus || !pipStatus) {
-            console.error('[EYV Popup] Action status elements not found');
-            return;
-        }
-        updateActionCardUI(stickyPlayerCard, stickyStatus, result.stickyPlayerEnabled);
-        updateActionCardUI(pipCard, pipStatus, result.pipEnabled);
+        updatePinChildrenState();          // reflect Pin Video state onto the nested automations
+        setupAmbientSliders(result);       // DEV: initialize ambient-tuning sliders from saved values
     })
     .catch(error => {
         console.error('[EYV Popup] Storage error or timeout:', error);
         showStatus('Failed to load settings. Please reopen the popup.', true);
     });
 
-    // Handle Sticky Player card click
-    stickyPlayerCard.addEventListener('click', function() {
-        const currentState = this.classList.contains('active');
-        const newState = !currentState;
-        const statusElement = this.querySelector('.action-status');
-
-        // Update UI immediately for responsiveness
-        updateActionCardUI(this, statusElement, newState);
-
-        // Save to storage
-        storageWithTimeout(() => {
-            return new Promise((resolve, reject) => {
-                chrome.storage.local.set({stickyPlayerEnabled: newState}, () => {
-                    if (chrome.runtime.lastError) {
-                        reject(chrome.runtime.lastError);
-                    } else {
-                        resolve();
-                    }
-                });
-            });
-        })
-        .then(() => {
-            // The write already succeeded; if the context is now gone, just skip the
-            // follow-up message/indicator. Do NOT revert the UI - the value is persisted.
-            if (!isChromeContextValid()) return;
-            showSaveConfirmation();
-            sendMessageToContentScript({ type: "FEATURE_TOGGLE", feature: 'stickyPlayer', enabled: newState });
-        })
-        .catch(error => {
-            console.error('[EYV Popup] Storage error:', error);
-            updateActionCardUI(stickyPlayerCard, statusElement, !newState);
-            if (error.message && error.message.includes('QUOTA')) {
-                showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-            }
-        });
-    });
-
-    // Handle PiP card click
-    pipCard.addEventListener('click', function() {
-        const currentState = this.classList.contains('active');
-        const newState = !currentState;
-        const statusElement = this.querySelector('.action-status');
-
-        // Update UI immediately for responsiveness
-        updateActionCardUI(this, statusElement, newState);
-
-        // Save to storage
-        storageWithTimeout(() => {
-            return new Promise((resolve, reject) => {
-                chrome.storage.local.set({pipEnabled: newState}, () => {
-                    if (chrome.runtime.lastError) {
-                        reject(chrome.runtime.lastError);
-                    } else {
-                        resolve();
-                    }
-                });
-            });
-        })
-        .then(() => {
-            // The write already succeeded; if the context is now gone, just skip the
-            // follow-up message/indicator. Do NOT revert the UI - the value is persisted.
-            if (!isChromeContextValid()) return;
-            showSaveConfirmation();
-            sendMessageToContentScript({ type: "FEATURE_TOGGLE", feature: 'pip', enabled: newState });
-        })
-        .catch(error => {
-            console.error('[EYV Popup] Storage error:', error);
-            updateActionCardUI(pipCard, statusElement, !newState);
-            if (error.message && error.message.includes('QUOTA')) {
-                showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-            }
-        });
-    });
-
-    // Save preference when 'defaultStickyToggle' changes
-    if (defaultStickyToggle) {
-        defaultStickyToggle.addEventListener('change', function() {
+    // Wire a checkbox to a storage key + (optional) content-script message, with per-key debounce,
+    // save confirmation, error handling, and UI revert on failure.
+    //   storageKey   - chrome.storage.local key to persist
+    //   buildMessage - (value) => message object for the content script, or null to skip messaging
+    //   onSaved      - optional (value) => void run after a successful save AND after a revert,
+    //                  so dependent UI (e.g. the nested automations) stays in sync either way
+    //   onChangeImmediate - optional (value) => void run synchronously the instant the toggle
+    //                  flips (before the debounced write), so dependent UI never lags the switch
+    function bindToggle(toggle, storageKey, buildMessage, onSaved, onChangeImmediate) {
+        if (!toggle) return;
+        toggle.addEventListener('change', function() {
             const newValue = this.checked;
-            const toggle = this;
 
-            // Debounce to prevent rapid concurrent writes
-            if (defaultStickyTimer) clearTimeout(defaultStickyTimer);
-            defaultStickyTimer = setTimeout(() => {
+            // Reflect dependent UI right away; the debounced save (and any revert) re-syncs later.
+            if (onChangeImmediate) onChangeImmediate(newValue);
+
+            if (timers[storageKey]) clearTimeout(timers[storageKey]);
+            timers[storageKey] = setTimeout(() => {
                 storageWithTimeout(() => {
                     return new Promise((resolve, reject) => {
-                        chrome.storage.local.set({defaultStickyEnabled: newValue}, () => {
+                        chrome.storage.local.set({ [storageKey]: newValue }, () => {
                             if (chrome.runtime.lastError) {
                                 reject(chrome.runtime.lastError);
                             } else {
@@ -304,16 +227,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 })
                 .then(() => {
-                    // The write already succeeded; if the context is now gone, just skip
-                    // the follow-up message/indicator. Do NOT revert - the value is saved.
+                    // The write already succeeded; if the context is now gone, just skip the
+                    // follow-up message/indicator. Do NOT revert the UI - the value is persisted.
                     if (!isChromeContextValid()) return;
                     showSaveConfirmation();
-                    // Notify content script so it can immediately activate sticky if enabled
-                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'defaultStickyEnabled', value: newValue });
+                    if (buildMessage) sendMessageToContentScript(buildMessage(newValue));
+                    if (onSaved) onSaved(newValue);
                 })
                 .catch(error => {
                     console.error('[EYV Popup] Storage error or timeout:', error);
                     toggle.checked = !newValue; // Revert UI - the write failed
+                    if (onSaved) onSaved(!newValue);
                     if (error.message && error.message.includes('QUOTA')) {
                         showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
                     } else if (error.message && error.message.includes('timeout')) {
@@ -324,163 +248,27 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Save preference when 'stickyOnScrollToggle' changes
-    if (stickyOnScrollToggle) {
-        stickyOnScrollToggle.addEventListener('change', function() {
-            const newValue = this.checked;
-            const toggle = this;
+    // Player buttons (master toggles that add a control to YouTube's player)
+    bindToggle(stickyPlayerToggle, 'stickyPlayerEnabled',
+        v => ({ type: 'FEATURE_TOGGLE', feature: 'stickyPlayer', enabled: v }),
+        updatePinChildrenState,   // re-sync after save / revert
+        updatePinChildrenState);  // dim the nested automations instantly on toggle
+    bindToggle(pipToggle, 'pipEnabled',
+        v => ({ type: 'FEATURE_TOGGLE', feature: 'pip', enabled: v }));
 
-            // Debounce to prevent rapid concurrent writes
-            if (stickyOnScrollTimer) clearTimeout(stickyOnScrollTimer);
-            stickyOnScrollTimer = setTimeout(() => {
-                storageWithTimeout(() => {
-                    return new Promise((resolve, reject) => {
-                        chrome.storage.local.set({stickyOnScroll: newValue}, () => {
-                            if (chrome.runtime.lastError) {
-                                reject(chrome.runtime.lastError);
-                            } else {
-                                resolve();
-                            }
-                        });
-                    });
-                })
-                .then(() => {
-                    // The write already succeeded; if the context is now gone, just skip
-                    // the follow-up message/indicator. Do NOT revert - the value is saved.
-                    if (!isChromeContextValid()) return;
-                    showSaveConfirmation();
-                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'stickyOnScroll', value: newValue });
-                })
-                .catch(error => {
-                    console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI - the write failed
-                    if (error.message && error.message.includes('QUOTA')) {
-                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-                    } else if (error.message && error.message.includes('timeout')) {
-                        showStatus('Storage operation timed out. Please try again.', true);
-                    }
-                });
-            }, DEBOUNCE_MS);
-        });
-    }
+    // Pin Video automations
+    bindToggle(defaultStickyToggle, 'defaultStickyEnabled',
+        v => ({ type: 'SETTING_CHANGED', key: 'defaultStickyEnabled', value: v }));
+    bindToggle(stickyOnScrollToggle, 'stickyOnScroll',
+        v => ({ type: 'SETTING_CHANGED', key: 'stickyOnScroll', value: v }));
+    bindToggle(inactiveWhenPausedToggle, 'inactiveWhenPaused',
+        v => ({ type: 'SETTING_CHANGED', key: 'inactiveWhenPaused', value: v }));
+    bindToggle(inactiveAtEndToggle, 'inactiveAtEnd',
+        v => ({ type: 'SETTING_CHANGED', key: 'inactiveAtEnd', value: v }));
 
-    // Save preference when 'inactiveWhenPausedToggle' changes
-    if (inactiveWhenPausedToggle) {
-        inactiveWhenPausedToggle.addEventListener('change', function() {
-            const newValue = this.checked;
-            const toggle = this;
-
-            // Debounce to prevent rapid concurrent writes
-            if (inactiveWhenPausedTimer) clearTimeout(inactiveWhenPausedTimer);
-            inactiveWhenPausedTimer = setTimeout(() => {
-                storageWithTimeout(() => {
-                    return new Promise((resolve, reject) => {
-                        chrome.storage.local.set({inactiveWhenPaused: newValue}, () => {
-                            if (chrome.runtime.lastError) {
-                                reject(chrome.runtime.lastError);
-                            } else {
-                                resolve();
-                            }
-                        });
-                    });
-                })
-                .then(() => {
-                    // The write already succeeded; if the context is now gone, just skip
-                    // the follow-up message/indicator. Do NOT revert - the value is saved.
-                    if (!isChromeContextValid()) return;
-                    showSaveConfirmation();
-                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'inactiveWhenPaused', value: newValue });
-                })
-                .catch(error => {
-                    console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI - the write failed
-                    if (error.message && error.message.includes('QUOTA')) {
-                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-                    } else if (error.message && error.message.includes('timeout')) {
-                        showStatus('Storage operation timed out. Please try again.', true);
-                    }
-                });
-            }, DEBOUNCE_MS);
-        });
-    }
-
-    // Save preference when 'inactiveAtEndToggle' changes
-    if (inactiveAtEndToggle) {
-        inactiveAtEndToggle.addEventListener('change', function() {
-            const newValue = this.checked;
-            const toggle = this;
-
-            // Debounce to prevent rapid concurrent writes
-            if (inactiveAtEndTimer) clearTimeout(inactiveAtEndTimer);
-            inactiveAtEndTimer = setTimeout(() => {
-                storageWithTimeout(() => {
-                    return new Promise((resolve, reject) => {
-                        chrome.storage.local.set({inactiveAtEnd: newValue}, () => {
-                            if (chrome.runtime.lastError) {
-                                reject(chrome.runtime.lastError);
-                            } else {
-                                resolve();
-                            }
-                        });
-                    });
-                })
-                .then(() => {
-                    // The write already succeeded; if the context is now gone, just skip
-                    // the follow-up message/indicator. Do NOT revert - the value is saved.
-                    if (!isChromeContextValid()) return;
-                    showSaveConfirmation();
-                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'inactiveAtEnd', value: newValue });
-                })
-                .catch(error => {
-                    console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI - the write failed
-                    if (error.message && error.message.includes('QUOTA')) {
-                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-                    } else if (error.message && error.message.includes('timeout')) {
-                        showStatus('Storage operation timed out. Please try again.', true);
-                    }
-                });
-            }, DEBOUNCE_MS);
-        });
-    }
-
-    // Save preference when 'ambientTabGlowToggle' changes (dev/experimental)
-    if (ambientTabGlowToggle) {
-        ambientTabGlowToggle.addEventListener('change', function() {
-            const newValue = this.checked;
-            const toggle = this;
-
-            // Debounce to prevent rapid concurrent writes
-            if (ambientTabGlowTimer) clearTimeout(ambientTabGlowTimer);
-            ambientTabGlowTimer = setTimeout(() => {
-                storageWithTimeout(() => {
-                    return new Promise((resolve, reject) => {
-                        chrome.storage.local.set({ambientTabGlow: newValue}, () => {
-                            if (chrome.runtime.lastError) {
-                                reject(chrome.runtime.lastError);
-                            } else {
-                                resolve();
-                            }
-                        });
-                    });
-                })
-                .then(() => {
-                    if (!isChromeContextValid()) return;
-                    showSaveConfirmation();
-                    sendMessageToContentScript({ type: "SETTING_CHANGED", key: 'ambientTabGlow', value: newValue });
-                })
-                .catch(error => {
-                    console.error('[EYV Popup] Storage error or timeout:', error);
-                    toggle.checked = !newValue; // Revert UI - the write failed
-                    if (error.message && error.message.includes('QUOTA')) {
-                        showStatus('Storage quota exceeded. Clear some browser data and try again.', true);
-                    } else if (error.message && error.message.includes('timeout')) {
-                        showStatus('Storage operation timed out. Please try again.', true);
-                    }
-                });
-            }, DEBOUNCE_MS);
-        });
-    }
+    // Experimental
+    bindToggle(ambientTabGlowToggle, 'ambientTabGlow',
+        v => ({ type: 'SETTING_CHANGED', key: 'ambientTabGlow', value: v }));
 
     // --- DEV / Experimental: frosted-tab tuning sliders ------------------------------------------
     // Live-preview while dragging (throttled SETTING_CHANGED messages), persist on a short debounce.

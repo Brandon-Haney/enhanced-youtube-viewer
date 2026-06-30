@@ -4,12 +4,12 @@ Enhanced YouTube Viewer is a Chrome browser extension designed to improve your Y
 
 ## Features
 
-*   **Sticky Player (Scrollable Comments):** Keep the video player fixed to the top of the screen while you scroll down to read comments or the video description. The player dynamically resizes with the browser window.
-*   **Stick on Scroll → Floating Mini-Player:** Optionally, as you scroll the player out of view, the video shrinks into a small floating mini-player so you can keep watching while you browse. iPad-style, you can **freely drag it anywhere** — it docks to the nearest **side edge** at whatever height you drop it (not just the four corners), and remembers the spot. **Fling it off the left or right edge** to tuck it into a slim tab; tap the tab to bring it back. It's also **resizable** (drag the inner-corner grabber to set your preferred size). Works in default and theater view.
+*   **Pin Video (Scrollable Comments):** Pin the video player to the top of the screen while you scroll down to read comments or the video description. The player dynamically resizes with the browser window.
+*   **Shrink to Corner on Scroll → Floating Mini-Player:** Optionally, as you scroll the player out of view, the video shrinks into a small floating mini-player so you can keep watching while you browse. iPad-style, you can **freely drag it anywhere** — it docks to the nearest **side edge** at whatever height you drop it (not just the four corners), and remembers the spot. **Fling it off the left or right edge** to tuck it into a slim tab; tap the tab to bring it back. It's also **resizable** (drag the inner-corner grabber to set your preferred size). Works in default and theater view.
 *   **Picture-in-Picture (PiP):** Launch the video into a separate, resizable floating window that stays on top of other applications, allowing you to multitask effectively.
-*   **Customizable Behavior:** A settings popup lets you Auto-Activate sticky on load, enable Stick on Scroll, and deactivate sticky when the video pauses or ends.
+*   **Customizable Behavior:** A settings popup lets you pin on page load, shrink to a floating corner on scroll, and unpin when the video pauses or ends.
 *   **Integrated Controls:** Feature toggles are conveniently located within YouTube's native player controls for a seamless experience.
-*   **Smart Deactivation:** Sticky mode automatically deactivates if YouTube's native Miniplayer or Fullscreen mode is engaged, preventing UI conflicts.
+*   **Smart Deactivation:** Pinning automatically deactivates if YouTube's native Miniplayer or Fullscreen mode is engaged, preventing UI conflicts.
 
 This extension aims to provide a smoother and more productive YouTube viewing session.
 
@@ -59,14 +59,14 @@ Once installed and active:
 
 1.  Navigate to any YouTube video watch page (e.g., `youtube.com/watch?v=...`).
 2.  The extension's features are integrated into the YouTube player's control bar:
-    *   **Sticky Player:** Click the **📌 (pin)** icon to toggle the sticky player on or off. When active, the video will stay at the top of your screen as you scroll.
+    *   **Pin Video:** Click the **📌 (pin)** icon to pin the video to the top of your screen. It stays put as you scroll; click again to unpin.
     *   **Picture-in-Picture (PiP):** Click the **<svg viewBox="0 0 24 24" style="width: 0.9em; height: 0.9em; vertical-align: -0.1em; fill: currentColor;"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></svg> (window)** icon to toggle PiP mode.
 3.  Click the extension's toolbar icon to open the settings popup, where you can:
-    *   **Auto-Activate** sticky mode on page load.
-    *   Enable **Stick on Scroll** — the player shrinks into a floating mini-player as you scroll. Drag it anywhere to reposition (it docks to the nearest side edge at any height and remembers the spot), fling it off the side to tuck it into a tab, and drag its inner-corner grabber to resize.
-    *   Turn on **Pause Deactivation** / **End Deactivation** to drop the top sticky player when the video pauses or ends.
-    *   **(Experimental)** Try **Ambient Tab Glow** (the edge-tuck tab takes its color from the playing video, iOS-style) and **Ambilight Halo** (a blurred glow of the video spills out behind the floating mini-player).
-4.  The sticky player will automatically disable if you activate YouTube's native Miniplayer or Fullscreen modes to prevent conflicts.
+    *   **Pin on page load** — start pinned automatically when the page opens.
+    *   Turn on **Shrink to corner on scroll** — the player shrinks into a floating mini-player as you scroll. Drag it anywhere to reposition (it docks to the nearest side edge at any height and remembers the spot), fling it off the side to tuck it into a tab, and drag its inner-corner grabber to resize.
+    *   Turn on **Unpin when paused** / **Unpin when video ends** to drop the pinned player automatically.
+    *   **(Experimental)** Turn on the **Frosted Video Tab** — when you tuck the mini-player into the edge, its tab shows a blurred slice of the live video (iOS now-playing style).
+4.  The pinned player will automatically disable if you activate YouTube's native Miniplayer or Fullscreen modes to prevent conflicts.
 
 ---
 

@@ -47,17 +47,6 @@
                             <span class="switch-thumb"></span>
                         </label>
                     </div>
-                    <div class="kid-row">
-                        <div class="setting-info">
-                            <div class="setting-name">Shrink to corner on scroll</div>
-                            <div class="setting-hint">Float a draggable mini-player as you scroll</div>
-                        </div>
-                        <label class="switch">
-                            <input type="checkbox" id="stickyOnScrollToggle">
-                            <span class="switch-track"></span>
-                            <span class="switch-thumb"></span>
-                        </label>
-                    </div>
                     <div class="kids-label">Then unpin when…</div>
                     <div class="kid-row">
                         <div class="setting-info">
@@ -91,6 +80,23 @@
                 </div>
                 <label class="switch">
                     <input type="checkbox" id="pipToggle">
+                    <span class="switch-track"></span>
+                    <span class="switch-thumb"></span>
+                </label>
+            </div>
+
+            <!-- Shrink to corner on scroll: its own feature now. It no longer requires the Pin
+                 Video button — the content script lazily creates the sticky engine for it. -->
+            <div class="settings-label spaced">While you scroll</div>
+
+            <div class="setting-card">
+                <div class="feature-icon">📐</div>
+                <div class="setting-info">
+                    <div class="setting-name">Shrink to corner on scroll</div>
+                    <div class="setting-hint">Float a draggable mini-player as you scroll — works on its own</div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="stickyOnScrollToggle">
                     <span class="switch-track"></span>
                     <span class="switch-thumb"></span>
                 </label>

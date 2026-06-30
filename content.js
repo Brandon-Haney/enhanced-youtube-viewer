@@ -591,7 +591,13 @@
                     // Clear any leftover suppression and evaluate the current scroll
                     // position so toggling on takes effect immediately.
                     scrollStickSuppressed = false;
-                    if (message.value) handleScrollStick();
+                    if (message.value) {
+                        handleScrollStick();
+                    } else if (stickyMode === 'corner' && stickyButtonElement?.classList.contains('active')) {
+                        // Turning scroll-stick off while the corner mini is showing: restore inline.
+                        stickyActivatedByScroll = false;
+                        stickyButtonElement.click();
+                    }
                 } else if (message.key === 'ambientTabGlow') {
                     ambientTabGlowEnabled = message.value;
                     settingsCache.ambientTabGlow = message.value;
@@ -654,8 +660,17 @@
                     const stickyBtn = document.querySelector('.eyv-player-button');
 
                     if (message.enabled) {
-                        // ENABLE: Create button if it doesn't exist
-                        if (!stickyBtn) {
+                        // ENABLE: show the manual Pin button. Adopt an existing engine if one is
+                        // already present (e.g. a detached one created by Shrink-to-corner) so we
+                        // never build a duplicate; only create a fresh engine when none exists.
+                        // NOTE: if a detached engine already exists, neither branch below runs, so
+                        // the button simply reappears on the next controls hover (insertButtons is
+                        // ungated once stickyPlayerEnabled is true) and Auto-Activate is intentionally
+                        // NOT re-fired here — "pin on page load" means load, not mid-session enable.
+                        if (!stickyButtonElement && stickyBtn) {
+                            stickyButtonElement = stickyBtn;
+                        }
+                        if (!stickyButtonElement) {
                             const player = findActivePlayer();
                             const playerRightControls = player?.querySelector('.ytp-right-controls');
                             const videoElement = player?.querySelector('video.html5-main-video');
@@ -720,31 +735,37 @@
                             }
                         }
                     } else {
-                        // DISABLE
-
-                        // 1. Handle Deactivation (Check in-memory element if DOM element is missing)
+                        // DISABLE: stop offering the manual Pin button. A scroll-driven corner mini
+                        // belongs to Shrink-to-corner, so leave it running; only tear down a TOP pin
+                        // (Pin Video's own behavior).
                         const targetBtn = stickyBtn || stickyButtonElement || buttonsToInsert.sticky;
-                        if (targetBtn && targetBtn.classList.contains('active')) {
-                            targetBtn.click(); // Deactivate sticky mode
+                        if (targetBtn && targetBtn.classList.contains('active') && stickyMode !== 'corner') {
+                            targetBtn.click(); // Deactivate the top pin
                         }
 
-                        // 2. Remove from DOM - check both queried element and in-memory references
-                        // Button may be in DOM (stickyBtn) or stored in buttonsToInsert for hover re-insertion
+                        // Remove the visible button from the player controls (either the queried
+                        // DOM node or the hover-reinsertion reference).
                         if (stickyBtn && stickyBtn.parentNode) {
                             stickyBtn.remove();
                         }
                         if (buttonsToInsert.sticky && buttonsToInsert.sticky.parentNode) {
                             buttonsToInsert.sticky.remove();
                         }
-                        if (stickyButtonElement && stickyButtonElement.parentNode) {
-                            stickyButtonElement.remove();
+
+                        if (stickyOnScrollEnabled) {
+                            // Keep the engine alive (detached) so Shrink-to-corner keeps working;
+                            // it just no longer appears in the controls. The hover-insert path is
+                            // gated on stickyPlayerEnabled, so it stays hidden until Pin is re-enabled.
+                            if (DEBUG) console.log('[EYV DBG] Pin button hidden; engine kept for Shrink-to-corner');
+                        } else {
+                            // Nothing else needs the engine - remove it and clear all references.
+                            if (stickyButtonElement && stickyButtonElement.parentNode) {
+                                stickyButtonElement.remove();
+                            }
+                            stickyButtonElement = null;
+                            buttonsToInsert.sticky = null;
+                            if (DEBUG) console.log('[EYV DBG] Sticky player button disabled and removed');
                         }
-
-                        // 3. Clear ALL references to prevent hover re-insertion
-                        stickyButtonElement = null;
-                        buttonsToInsert.sticky = null;
-
-                        if (DEBUG) console.log('[EYV DBG] Sticky player button disabled and removed');
                     }
                 } else if (message.feature === 'pip') {
                     pipEnabled = message.enabled;
@@ -935,10 +956,32 @@
     // Hysteresis: activate only once the inline player is essentially scrolled out
     // (its bottom passes under the masthead); deactivate once the home area scrolls
     // back near the top. The gap between the two thresholds prevents flicker.
+    // Create the sticky "engine" (the pin button element) WITHOUT inserting it into the player
+    // controls. Scroll-stick uses this element purely as its activation mechanism and active-state
+    // holder, so the corner mini must be able to run even when the visible Pin Video button
+    // (stickyPlayerEnabled) is off. Whether it ever becomes visible is gated separately by
+    // stickyPlayerEnabled in the hover-insert path. Returns the element, or null if the player
+    // isn't ready yet.
+    function ensureStickyButtonMechanism() {
+        if (stickyButtonElement) return stickyButtonElement;
+        const player = findActivePlayer();
+        const videoElement = player?.querySelector('video.html5-main-video');
+        if (!player || !videoElement) return null;
+        stickyButtonElement = createStickyButtonLogic(player, videoElement);
+        stickyButtonElement.className = 'ytp-button eyv-player-button';
+        stickyButtonElement.innerHTML = pinSVGIcon;
+        stickyButtonElement.title = 'Pin video';
+        stickyButtonElement.setAttribute('aria-label', 'Pin video');
+        stickyButtonElement.style.display = 'inline-flex';
+        buttonsToInsert.sticky = stickyButtonElement;
+        if (DEBUG) console.log('[EYV DBG] Created sticky engine for Shrink-to-corner (no visible button)');
+        return stickyButtonElement;
+    }
+
     function handleScrollStick() {
         if (!stickyOnScrollEnabled) return;
         if (window.location.pathname !== '/watch') return;
-        if (!stickyButtonElement || !playerElementRef?.isConnected) return;
+        if (!playerElementRef?.isConnected) return;
         // Works in default AND theater view (both scroll). Excluded only in fullscreen,
         // where the page doesn't scroll and the player owns the whole screen.
         const ytdApp = document.querySelector('ytd-app');
@@ -947,7 +990,7 @@
         const rect = getScrollHomeRect();
         if (!rect) return;
         const masthead = getMastheadOffset();
-        const isSticky = stickyButtonElement.classList.contains('active');
+        const isSticky = !!stickyButtonElement && stickyButtonElement.classList.contains('active');
         // Trigger off how much of the player's home area still shows below the top bar, as a
         // FRACTION of its height (not a fixed pixel gap) so the feel is consistent across
         // player sizes/views. Earlier these required the player to be fully past (to stick) or
@@ -963,6 +1006,9 @@
 
         if (!isSticky) {
             if (scrolledOut && !scrollStickSuppressed) {
+                // Lazily materialize the engine so the corner mini works even when the manual
+                // Pin Video button (stickyPlayerEnabled) is off.
+                if (!stickyButtonElement && !ensureStickyButtonMechanism()) return;
                 pendingStickyMode = 'corner'; // scroll-stick uses the floating corner mini
                 stickyActivatedByScroll = true;
                 stickyButtonElement.click(); // programmatic; conflict-guarded inside the handler
@@ -2722,8 +2768,13 @@
                     if (DEBUG) console.log('[EYV DBG MO] Player node disconnected, skipping callback');
                     return;
                 }
-                if (!stickyButtonElement || !stickyButtonElement.isConnected) {
-                    if (DEBUG) console.log('[EYV DBG MO] Sticky button disconnected, skipping callback');
+                // Gate on the ENGINE existing, not on DOM attachment: the sticky button can run
+                // detached (a scroll-stick corner mini with the manual Pin button hidden), and its
+                // canonical state lives on classList, not on isConnected. cleanup() nulls the ref on
+                // navigation, so `!stickyButtonElement` already covers the post-cleanup case — and
+                // the live-element check above (playerNodeToObserve.isConnected) catches stale fires.
+                if (!stickyButtonElement) {
+                    if (DEBUG) console.log('[EYV DBG MO] No sticky engine, skipping callback');
                     return;
                 }
 
@@ -2802,7 +2853,7 @@
                         }, 100);
                     }
                 }
-                if (shouldDeactivate && stickyButtonElement?.isConnected && stickyButtonElement.classList.contains('active')) {
+                if (shouldDeactivate && stickyButtonElement?.classList.contains('active')) {
                     deactivateStickyModeInternal(false, true);
                     return;
                 }

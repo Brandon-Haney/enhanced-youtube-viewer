@@ -145,7 +145,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function updatePinChildrenState() {
         const on = !!stickyPlayerToggle.checked;
         if (pinChildren) pinChildren.classList.toggle('disabled', !on);
-        [defaultStickyToggle, stickyOnScrollToggle, inactiveWhenPausedToggle, inactiveAtEndToggle].forEach(el => {
+        // Shrink-to-corner is intentionally NOT here: it's an independent feature that works
+        // without the Pin button, so it stays enabled regardless of Pin Video's state.
+        [defaultStickyToggle, inactiveWhenPausedToggle, inactiveAtEndToggle].forEach(el => {
             if (el) el.disabled = !on;
         });
     }

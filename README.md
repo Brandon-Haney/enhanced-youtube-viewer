@@ -63,7 +63,7 @@ Once installed and active:
     *   **Picture-in-Picture (PiP):** Click the **<svg viewBox="0 0 24 24" style="width: 0.9em; height: 0.9em; vertical-align: -0.1em; fill: currentColor;"><path d="M19,11H13V5h6Zm2-8H3A2,2,0,0,0,1,5V19a2,2,0,0,0,2,2H21a2,2,0,0,0,2-2V5A2,2,0,0,0,21,3Zm0,16H3V5H21Z"/></svg> (window)** icon to toggle PiP mode.
 3.  Click the extension's toolbar icon to open the settings popup, where you can:
     *   **Pin on page load** — start pinned automatically when the page opens.
-    *   Turn on **Shrink to corner on scroll** — the player shrinks into a floating mini-player as you scroll. Drag it anywhere to reposition (it docks to the nearest side edge at any height and remembers the spot), fling it off the side to tuck it into a tab, and drag its inner-corner grabber to resize.
+    *   Turn on **Shrink to corner on scroll** — an independent feature (you don't need Pin Video enabled); the player shrinks into a floating mini-player as you scroll. Drag it anywhere to reposition (it docks to the nearest side edge at any height and remembers the spot), fling it off the side to tuck it into a tab, and drag its inner-corner grabber to resize.
     *   Turn on **Unpin when paused** / **Unpin when video ends** to drop the pinned player automatically.
     *   **(Experimental)** Turn on the **Frosted Video Tab** — when you tuck the mini-player into the edge, its tab shows a blurred slice of the live video (iOS now-playing style).
 4.  The pinned player will automatically disable if you activate YouTube's native Miniplayer or Fullscreen modes to prevent conflicts.
